@@ -30,7 +30,15 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 		},
 	});
 
-	const ability = chooseAblility(request, findModel(Google, request.modelId).ability);
+	const modelAbility = (() => {
+		try {
+			return findModel(Google, request.modelId).ability;
+		} catch {
+			// Relay custom models: infer from whether images are provided
+			return request.images && request.images.length > 0 ? "i2i" : "t2i";
+		}
+	})() as any;
+	const ability = chooseAblility(request, modelAbility);
 
 	let contents: any;
 

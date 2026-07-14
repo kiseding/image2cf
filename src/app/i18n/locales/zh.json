@@ -129,7 +129,7 @@
 		"relay": {
 			"title": "中转站",
 			"description": "配置自定义 API 中转站与密钥",
-			"hint": "支持 OpenAI / Google 兼容接口，可配置多个中转站",
+			"hint": "支持 OpenAI / Google 兼容中转（如 APIKEY.FUN）。可配置多个。",
 			"add": "添加中转站",
 			"edit": "编辑中转站",
 			"empty": "暂无中转站，点击上方添加",
@@ -147,7 +147,13 @@
 			"needModel": "至少配置一个模型",
 			"saved": "中转站已保存",
 			"deleted": "中转站已删除",
-			"confirmDelete": "确认删除该中转站？"
+			"confirmDelete": "确认删除该中转站？",
+			"apikeyFunHint": "已内置 APIKEY.FUN 预设：点下方卡片一键填充，只需粘贴你的 API Key。",
+			"preset": "快速预设",
+			"presetPlaceholder": "选择预设或自定义",
+			"custom": "自定义",
+			"openaiBaseHint": "OpenAI 兼容请填到 /v1，例如 https://api.apikey.fun/v1",
+			"googleBaseHint": "Google 兼容填主机根地址，例如 https://api.apikey.fun（不要加 /v1）"
 		},
 		"users": {
 			"title": "用户管理",

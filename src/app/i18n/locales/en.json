@@ -129,7 +129,7 @@
 		"relay": {
 			"title": "Relay Stations",
 			"description": "Configure custom API relay stations and API keys",
-			"hint": "Supports OpenAI / Google compatible APIs. You can add multiple relays.",
+			"hint": "Supports OpenAI / Google compatible relays (e.g. APIKEY.FUN). Multiple allowed.",
 			"add": "Add Relay",
 			"edit": "Edit Relay",
 			"empty": "No relays yet. Click above to add one.",
@@ -147,7 +147,13 @@
 			"needModel": "At least one model is required",
 			"saved": "Relay saved",
 			"deleted": "Relay deleted",
-			"confirmDelete": "Delete this relay station?"
+			"confirmDelete": "Delete this relay station?",
+			"apikeyFunHint": "Built-in APIKEY.FUN presets: click a card, then paste your API key.",
+			"preset": "Preset",
+			"presetPlaceholder": "Choose a preset or custom",
+			"custom": "Custom",
+			"openaiBaseHint": "OpenAI-compatible base should end with /v1, e.g. https://api.apikey.fun/v1",
+			"googleBaseHint": "Google-compatible base is host root, e.g. https://api.apikey.fun (no /v1)"
 		},
 		"users": {
 			"title": "User Management",

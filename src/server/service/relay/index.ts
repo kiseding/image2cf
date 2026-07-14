@@ -87,6 +87,16 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 	};
 };
 
+function normalizeBaseURL(type: "openai" | "google", baseURL: string) {
+	let u = baseURL.trim().replace(/\/+$/, "");
+	if (type === "openai") {
+		if (!/\/v\d+[a-z]*$/i.test(u)) u = `${u}/v1`;
+	} else {
+		u = u.replace(/\/v1beta$/i, "").replace(/\/v1$/i, "");
+	}
+	return u;
+}
+
 const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 	const { db } = getContext();
 	const [row] = await db
@@ -95,8 +105,8 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			userId: ctx.userId,
 			name: req.name,
 			type: req.type,
-			baseURL: req.baseURL,
-			apiKey: req.apiKey,
+			baseURL: normalizeBaseURL(req.type, req.baseURL),
+			apiKey: req.apiKey.trim(),
 			models: req.models,
 			enabled: req.enabled,
 		})
@@ -113,13 +123,16 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 		throw new ServiceException("not_found", "Relay not found");
 	}
 
+	const nextType = req.type ?? existing.type;
 	await db
 		.update(userRelays)
 		.set({
 			...(req.name !== undefined ? { name: req.name } : {}),
 			...(req.type !== undefined ? { type: req.type } : {}),
-			...(req.baseURL !== undefined ? { baseURL: req.baseURL } : {}),
-			...(req.apiKey !== undefined ? { apiKey: req.apiKey } : {}),
+			...(req.baseURL !== undefined
+				? { baseURL: normalizeBaseURL(nextType as "openai" | "google", req.baseURL) }
+				: {}),
+			...(req.apiKey !== undefined ? { apiKey: req.apiKey.trim() } : {}),
 			...(req.models !== undefined ? { models: req.models } : {}),
 			...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
 			updatedAt: new Date().toISOString(),

@@ -92,7 +92,14 @@ const OpenAI: AiProvider = {
 			size = aspectRatioSizes[request.aspectRatio];
 		}
 		try {
-			switch (chooseAblility(request, findModel(OpenAI, request.modelId).ability)) {
+			const modelAbility = (() => {
+			try {
+				return findModel(OpenAI, request.modelId).ability;
+			} catch {
+				return request.images && request.images.length > 0 ? "i2i" : "t2i";
+			}
+		})() as any;
+		switch (chooseAblility(request, modelAbility)) {
 				case "t2i":
 					// Text-to-image generation
 					generateResult = await client.images.generate({

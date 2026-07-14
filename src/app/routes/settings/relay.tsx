@@ -8,8 +8,9 @@ import { Switch } from "@/app/components/ui/switch";
 import { useToast } from "@/app/hooks/useToast";
 import { useRelayService } from "@/app/hooks/useService";
 import { SettingsPageLayout } from "@/app/routes/settings/-components/SettingsPageLayout";
+import { RELAY_PRESETS } from "@/server/ai/provider/relay-presets";
 import { createFileRoute } from "@tanstack/react-router";
-import { LucideNetwork, Plus, Trash2 } from "lucide-react";
+import { ExternalLink, LucideNetwork, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
@@ -58,6 +59,24 @@ function RelaySettingsPage() {
 		setEditingId(null);
 		setForm(emptyForm);
 		setDialogOpen(true);
+	};
+
+	const applyPreset = (presetId: string) => {
+		const preset = RELAY_PRESETS.find((p) => p.id === presetId);
+		if (!preset) return;
+		setForm({
+			name: preset.name,
+			type: preset.type,
+			baseURL: preset.baseURL,
+			apiKey: form.apiKey, // keep key if user already typed
+			enabled: true,
+			models: preset.models.map((m) => ({
+				id: m.id,
+				name: m.name,
+				ability: (m.ability as "t2i" | "i2i") || "i2i",
+				maxInputImages: m.maxInputImages || 1,
+			})),
+		});
 	};
 
 	const openEdit = async (id: string) => {
@@ -156,12 +175,50 @@ function RelaySettingsPage() {
 	return (
 		<SettingsPageLayout>
 			<div className="space-y-4 p-6">
-				<div className="flex items-center justify-between">
-					<p className="text-muted-foreground text-sm">{t("settings.relay.hint")}</p>
+				<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+					<div className="space-y-1">
+						<p className="text-muted-foreground text-sm">{t("settings.relay.hint")}</p>
+						<p className="text-muted-foreground text-xs">
+							{t("settings.relay.apikeyFunHint")}{" "}
+							<a
+								href="https://apikey.fun/docs#ApiScripts"
+								target="_blank"
+								rel="noreferrer"
+								className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"
+							>
+								APIKEY.FUN Docs <ExternalLink className="h-3 w-3" />
+							</a>
+						</p>
+					</div>
 					<Button onClick={openCreate} size="sm">
 						<Plus className="mr-1 h-4 w-4" />
 						{t("settings.relay.add")}
 					</Button>
+				</div>
+
+				{/* Quick presets */}
+				<div className="grid gap-2 sm:grid-cols-3">
+					{RELAY_PRESETS.map((preset) => (
+						<button
+							key={preset.id}
+							type="button"
+							className="rounded-xl border bg-card/50 p-3 text-left transition hover:border-primary/50 hover:bg-accent/40"
+							onClick={() => {
+								setEditingId(null);
+								applyPreset(preset.id);
+								setDialogOpen(true);
+							}}
+						>
+							<div className="mb-1 flex items-center gap-2">
+								<span className="font-medium text-sm">{preset.name}</span>
+								<Badge variant="outline" className="text-[10px]">
+									{preset.type}
+								</Badge>
+							</div>
+							<p className="line-clamp-2 text-muted-foreground text-xs">{preset.description}</p>
+							<p className="mt-1 truncate text-[10px] text-muted-foreground/80">{preset.baseURL}</p>
+						</button>
+					))}
 				</div>
 
 				{isLoading ? (
@@ -210,6 +267,32 @@ function RelaySettingsPage() {
 						<DialogTitle>{editingId ? t("settings.relay.edit") : t("settings.relay.add")}</DialogTitle>
 					</DialogHeader>
 					<div className="space-y-4">
+						{!editingId && (
+							<div className="space-y-2">
+								<Label>{t("settings.relay.preset")}</Label>
+								<Select
+									onValueChange={(v) => {
+										if (v === "custom") {
+											setForm(emptyForm);
+											return;
+										}
+										applyPreset(v);
+									}}
+								>
+									<SelectTrigger>
+										<SelectValue placeholder={t("settings.relay.presetPlaceholder")} />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="custom">{t("settings.relay.custom")}</SelectItem>
+										{RELAY_PRESETS.map((p) => (
+											<SelectItem key={p.id} value={p.id}>
+												{p.name}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+						)}
 						<div className="space-y-2">
 							<Label>{t("settings.relay.name")}</Label>
 							<Input
@@ -238,8 +321,15 @@ function RelaySettingsPage() {
 							<Input
 								value={form.baseURL}
 								onChange={(e) => setForm((p) => ({ ...p, baseURL: e.target.value }))}
-								placeholder="https://api.example.com/v1"
+								placeholder={
+									form.type === "google" ? "https://api.apikey.fun" : "https://api.apikey.fun/v1"
+								}
 							/>
+							<p className="text-muted-foreground text-xs">
+								{form.type === "openai"
+									? t("settings.relay.openaiBaseHint")
+									: t("settings.relay.googleBaseHint")}
+							</p>
 						</div>
 						<div className="space-y-2">
 							<Label>API Key</Label>
