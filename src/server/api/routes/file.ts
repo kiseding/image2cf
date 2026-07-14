@@ -53,10 +53,19 @@ const app = new Hono<Env>()
 			case "r2:": {
 				const obj = await getR2Object(metadata.accessUrl);
 				if (!obj) {
-					return c.json({ error: "R2 object not found" }, 404);
+					// Link is permanent in D1; object bytes only retained ~30 days
+					return c.json(
+						{
+							error: "expired",
+							message: "Image file expired (kept 30 days). Preview link remains but content was purged.",
+							fileId,
+						},
+						410,
+					);
 				}
 				contentType = obj.httpMetadata?.contentType || "image/png";
 				c.header("Content-Type", contentType);
+				c.header("Cache-Control", "private, max-age=31536000");
 				const buf = new Uint8Array(await obj.arrayBuffer());
 				return stream(c, async (stream) => {
 					await stream.write(buf);

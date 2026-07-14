@@ -26,9 +26,16 @@ binding = "AI"
 binding = "R2"
 bucket_name = "image2cf"
 
+# Daily cron: purge R2 object bytes older than R2_RETENTION_DAYS
+# Preview links in D1 remain permanent; expired objects return HTTP 410
+[triggers]
+crons = ["0 3 * * *"]
+
 [vars]
 # File storage: base64 | r2 (default r2 when R2 binding present)
 FILE_STORAGE = "r2"
+# How long to keep image *bytes* in R2 (days). Links stay forever.
+R2_RETENTION_DAYS = "30"
 # Set DEBUG=true (Dashboard var or secret) to enable /api/debug/*
 # DEBUG = "false"
 # Application deployment mode configuration

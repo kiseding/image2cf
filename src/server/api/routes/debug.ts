@@ -1,6 +1,7 @@
 import { extractImagesFromAny } from "@/server/lib/image-parse";
 import { readWorkerEnv } from "@/server/lib/worker-env";
 import { getContext } from "@/server/service/context";
+import { purgeExpiredR2Objects, resolveRetentionDays } from "@/server/service/file/retention";
 import { getActiveStorageMode } from "@/server/service/file/storage";
 import { eq, desc } from "drizzle-orm";
 import { Hono } from "hono";
@@ -29,6 +30,7 @@ const app = new Hono<Env>()
 	.get("/", async (c) => {
 		const e = readWorkerEnv(c.env as any);
 		const ctx = getContext();
+		const retentionDays = resolveRetentionDays({ R2_RETENTION_DAYS: e.R2_RETENTION_DAYS });
 		return c.json(
 			ok({
 				debug: true,
@@ -36,6 +38,8 @@ const app = new Hono<Env>()
 				mode: e.MODE || null,
 				fileStorageEnv: e.FILE_STORAGE || null,
 				fileStorageActive: getActiveStorageMode(),
+				r2RetentionDays: retentionDays,
+				r2Policy: "Links (D1 file id / preview URL) are permanent; object bytes purged after retention.",
 				bindings: {
 					DB: !!e.DB || !!c.env.DB,
 					AI: !!e.AI || !!c.env.AI,
@@ -173,18 +177,37 @@ const app = new Hono<Env>()
 		if (!R2) return c.json(ok({ configured: false, objects: [] }));
 		const prefix = c.req.query("prefix") || "users/";
 		const listed = await R2.list({ prefix, limit: 30 });
+		const retentionDays = resolveRetentionDays({
+			R2_RETENTION_DAYS: readWorkerEnv(c.env as any).R2_RETENTION_DAYS,
+		});
+		const cutoff = Date.now() - retentionDays * 86400000;
 		return c.json(
 			ok({
 				configured: true,
+				retentionDays,
 				truncated: listed.truncated,
-				objects: listed.objects.map((o) => ({
-					key: o.key,
-					size: o.size,
-					uploaded: o.uploaded,
-					httpMetadata: o.httpMetadata,
-				})),
+				objects: listed.objects.map((o) => {
+					const uploaded = o.uploaded?.getTime?.() ?? 0;
+					return {
+						key: o.key,
+						size: o.size,
+						uploaded: o.uploaded,
+						storedAt: o.customMetadata?.storedAt || null,
+						expired: uploaded > 0 && uploaded < cutoff,
+						httpMetadata: o.httpMetadata,
+					};
+				}),
 			}),
 		);
+	})
+	/** Manually run retention purge (same as daily cron) */
+	.post("/r2/purge", async (c) => {
+		const { R2, db } = getContext();
+		if (!R2) return c.json({ code: "error", message: "R2 not configured" }, 400);
+		const e = readWorkerEnv(c.env as any);
+		const retentionDays = resolveRetentionDays({ R2_RETENTION_DAYS: e.R2_RETENTION_DAYS });
+		const result = await purgeExpiredR2Objects({ R2, db, retentionDays, maxScan: 2000 });
+		return c.json(ok(result));
 	});
 
 export default app;

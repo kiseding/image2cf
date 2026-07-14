@@ -5,12 +5,12 @@ import { chats, messageAttachments, messageGenerations, messages } from "@/serve
 import { createSchemaOmits } from "@/server/db/util";
 import { inBrowser, inCfWorker } from "@/server/lib/env";
 import { ServiceException } from "@/server/lib/exception";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { createInsertSchema, createUpdateSchema } from "drizzle-zod";
 import z from "zod/v4";
 import { aiService } from "../ai";
 import { type RequestContext, getContext } from "../context";
-import { getFileData, getFileUrl, saveFiles } from "../file/storage";
+import { deleteStoredFiles, getFileData, getFileUrl, saveFiles } from "../file/storage";
 import { relayService } from "../relay";
 
 export const CreateChatSchema = createInsertSchema(chats)
@@ -178,6 +178,14 @@ export const DeleteChatSchema = z.object({
 	id: z.string(),
 });
 export type DeleteChat = z.infer<typeof DeleteChatSchema>;
+
+/**
+ * Hard-delete a chat and purge all related data:
+ * - messages / attachments / generations
+ * - file rows in D1
+ * - R2 object bytes
+ * Preview links become invalid after this (not soft-delete).
+ */
 const deleteChat = async (req: DeleteChat, ctx: RequestContext) => {
 	const { db } = getContext();
 	const { userId } = ctx;
@@ -190,7 +198,69 @@ const deleteChat = async (req: DeleteChat, ctx: RequestContext) => {
 		return false;
 	}
 
-	await getContext().db.update(chats).set({ deleted: true }).where(eq(chats.id, req.id));
+	const msgs = await db.query.messages.findMany({
+		where: eq(messages.chatId, req.id),
+		with: {
+			attachments: true,
+			generation: true,
+		},
+	});
+
+	const fileIds = new Set<string>();
+	const generationIds = new Set<string>();
+	const messageIds: string[] = [];
+
+	for (const m of msgs) {
+		messageIds.push(m.id);
+		if (m.generationId) generationIds.add(m.generationId);
+		for (const att of m.attachments || []) {
+			if (att.fileId) fileIds.add(att.fileId);
+		}
+		const gFiles = m.generation?.fileIds as string[] | null | undefined;
+		if (Array.isArray(gFiles)) {
+			for (const fid of gFiles) if (fid) fileIds.add(fid);
+		}
+	}
+
+	// Extra: load generations by id in case relation missing
+	if (generationIds.size) {
+		const gens = await db.query.messageGenerations.findMany({
+			where: inArray(messageGenerations.id, [...generationIds]),
+		});
+		for (const g of gens) {
+			const gFiles = g.fileIds as string[] | null;
+			if (Array.isArray(gFiles)) {
+				for (const fid of gFiles) if (fid) fileIds.add(fid);
+			}
+		}
+	}
+
+	// 1) Delete R2 objects + D1 file rows first
+	await deleteStoredFiles([...fileIds], userId);
+
+	// 2) Delete attachments for these messages
+	if (messageIds.length) {
+		await db.delete(messageAttachments).where(inArray(messageAttachments.messageId, messageIds));
+	}
+
+	// 3) Clear generationId on messages so generations can be hard-deleted
+	if (messageIds.length) {
+		await db
+			.update(messages)
+			.set({ generationId: null })
+			.where(inArray(messages.id, messageIds));
+	}
+
+	// 4) Delete generations
+	if (generationIds.size) {
+		await db.delete(messageGenerations).where(inArray(messageGenerations.id, [...generationIds]));
+	}
+
+	// 5) Delete messages
+	await db.delete(messages).where(eq(messages.chatId, req.id));
+
+	// 6) Hard-delete chat (not soft-delete)
+	await db.delete(chats).where(eq(chats.id, req.id));
 
 	return true;
 };
@@ -269,12 +339,30 @@ const deleteMessage = async (req: DeleteMessage, ctx: RequestContext) => {
 		throw new ServiceException("not_found", "Message not found");
 	}
 
-	// Delete message attachments (this should cascade delete via foreign key constraints)
+	const fileIds = new Set<string>();
+	for (const att of message.attachments || []) {
+		if (att.fileId) fileIds.add(att.fileId);
+	}
+	const gFiles = message.generation?.fileIds as string[] | null | undefined;
+	if (Array.isArray(gFiles)) {
+		for (const fid of gFiles) if (fid) fileIds.add(fid);
+	}
+
+	// Delete attachment rows first
 	if (message.attachments && message.attachments.length > 0) {
 		await db.delete(messageAttachments).where(eq(messageAttachments.messageId, req.messageId));
 	}
 
-	// Delete the message (this should cascade delete associated generation via foreign key constraint)
+	// Clear generation link then delete generation + files
+	const generationId = message.generationId;
+	if (generationId) {
+		await db.update(messages).set({ generationId: null }).where(eq(messages.id, req.messageId));
+		await db.delete(messageGenerations).where(eq(messageGenerations.id, generationId));
+	}
+
+	await deleteStoredFiles([...fileIds], userId);
+
+	// Delete the message
 	await db.delete(messages).where(eq(messages.id, req.messageId));
 
 	// Update chat timestamp

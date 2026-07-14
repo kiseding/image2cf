@@ -73,11 +73,21 @@ const storageHandlers: Record<
 			if (!R2) throw new Error("R2 binding is not configured");
 			const { mime, bytes, ext } = await toBytes(fileData);
 			const key = objectKey(userId, ext);
+			const storedAt = new Date().toISOString();
 			await R2.put(key, bytes, {
-				httpMetadata: { contentType: mime },
-				customMetadata: { userId },
+				httpMetadata: {
+					contentType: mime,
+					// Cache object responses aggressively; link stays valid even after purge returns 410
+					cacheControl: "private, max-age=31536000",
+				},
+				customMetadata: {
+					userId,
+					storedAt,
+					// Object bytes retained ~30d; D1 link (file id) is permanent
+					retentionDays: "30",
+				},
 			});
-			// Store as r2://object-key (not a public URL)
+			// Store as r2://object-key — permanent DB pointer; object may expire
 			return `r2://${key}`;
 		},
 		get: async (file) => file.url,
@@ -232,3 +242,50 @@ export const getFileUrl = async (fileId: string, userId: string) => {
 export function getActiveStorageMode(): Storage {
 	return resolveStorageMode();
 }
+
+function r2KeyFromUrl(url: string): string | null {
+	if (!url?.startsWith("r2://")) return null;
+	return url.replace(/^r2:\/\//, "");
+}
+
+/**
+ * Delete stored files (R2 objects + D1 rows). Safe to call with empty/unknown ids.
+ * Returns how many D1 rows and R2 objects were removed.
+ */
+export async function deleteStoredFiles(
+	fileIds: string[],
+	userId?: string,
+): Promise<{ dbDeleted: number; r2Deleted: number }> {
+	const { db, R2 } = getContext();
+	const ids = [...new Set((fileIds || []).filter(Boolean))];
+	if (!ids.length) return { dbDeleted: 0, r2Deleted: 0 };
+
+	let r2Deleted = 0;
+	let dbDeleted = 0;
+
+	for (const id of ids) {
+		const row = await db.query.files.findFirst({
+			where: userId ? and(eq(files.id, id), eq(files.userId, userId)) : eq(files.id, id),
+		});
+		if (!row) continue;
+
+		if (row.storage === "r2" || row.url.startsWith("r2://")) {
+			const key = r2KeyFromUrl(row.url);
+			if (key && R2) {
+				try {
+					await R2.delete(key);
+					r2Deleted++;
+				} catch (e) {
+					console.error("[storage] R2 delete failed", key, e);
+				}
+			}
+		}
+
+		await db.delete(files).where(eq(files.id, id));
+		dbDeleted++;
+	}
+
+	return { dbDeleted, r2Deleted };
+}
+
+

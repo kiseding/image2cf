@@ -34,6 +34,7 @@ export function readWorkerEnv(env: Record<string, any> | undefined | null) {
 		COOKIE_DOMAIN: get("COOKIE_DOMAIN"),
 		FILE_STORAGE: get("FILE_STORAGE"),
 		DEBUG: get("DEBUG"),
+		R2_RETENTION_DAYS: get("R2_RETENTION_DAYS"),
 		// Keep raw env for D1 / AI / R2 bindings (not copied via spread)
 		raw: e,
 		DB: e.DB as D1Database | undefined,

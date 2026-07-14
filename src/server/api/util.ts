@@ -52,6 +52,8 @@ export type Env = {
 		COOKIE_DOMAIN?: string;
 		MODE?: string;
 		FILE_STORAGE?: "base64" | "disk" | "r2";
+		/** Days to keep R2 object bytes (default 30). DB links are permanent. */
+		R2_RETENTION_DAYS?: string;
 		/** Set to "true" to enable /api/debug/* */
 		DEBUG?: "true" | "false" | string;
 	};
