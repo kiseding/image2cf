@@ -231,6 +231,43 @@ function RootComponent() {
 }
 
 function AppContent() {
+	const { isLogin, isLoading: authLoading } = useAuth();
+	const { openLoginModal } = useUIStore();
+	const { t } = useTranslation();
+
+	// Multi-user mode: require login before any app content
+	useEffect(() => {
+		if (!authLoading && !isLogin) {
+			openLoginModal();
+		}
+	}, [authLoading, isLogin, openLoginModal]);
+
+	if (authLoading) {
+		return null;
+	}
+
+	if (!isLogin) {
+		return (
+			<div className="flex h-app min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-muted/20 p-6">
+				<div className="w-full max-w-md space-y-4 text-center">
+					<img src="/logo.svg" alt="image2cf" className="mx-auto h-14 w-14" />
+					<h1 className="font-bold text-2xl">image2cf</h1>
+					<p className="font-medium text-lg">{t("auth.loginRequired")}</p>
+					<p className="text-muted-foreground text-sm">{t("auth.loginRequiredDesc")}</p>
+					<button
+						type="button"
+						onClick={openLoginModal}
+						className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-6 font-medium text-primary-foreground text-sm hover:bg-primary/90"
+					>
+						{t("auth.login")}
+					</button>
+				</div>
+				<LoginModal forceOpen />
+				<Toaster position="top-center" />
+			</div>
+		);
+	}
+
 	return (
 		<div className="flex h-app bg-gradient-to-br from-background via-background to-muted/20 md:h-screen">
 			<GlobalNavigation />

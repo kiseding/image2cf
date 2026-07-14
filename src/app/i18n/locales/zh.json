@@ -222,7 +222,9 @@
 		"passwordTooLong": "密码过长",
 		"userAlreadyExists": "该邮箱地址已被注册",
 		"noRegistration": "本系统不支持公开注册，请联系管理员开通账号",
-		"userBanned": "账号已被禁用，请联系管理员"
+		"userBanned": "账号已被禁用，请联系管理员",
+		"loginRequired": "请先登录后使用",
+		"loginRequiredDesc": "本系统不支持访客访问，账号由管理员分配"
 	},
 	"user": {
 		"avatar": "用户头像",

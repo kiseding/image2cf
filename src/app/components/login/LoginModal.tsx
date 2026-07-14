@@ -8,10 +8,16 @@ import { AlertCircle, Eye, EyeOff, Lock, Mail } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-export function LoginModal() {
-	const { isLoginModalOpen, closeLoginModal } = useUIStore();
+interface LoginModalProps {
+	/** When true, modal cannot be dismissed until logged in */
+	forceOpen?: boolean;
+}
+
+export function LoginModal({ forceOpen = false }: LoginModalProps) {
+	const { isLoginModalOpen, closeLoginModal, openLoginModal } = useUIStore();
 	const { signIn, isLogin, user } = useAuth();
 	const { t } = useTranslation();
+	const open = forceOpen || isLoginModalOpen;
 
 	const [showPassword, setShowPassword] = useState(false);
 	const [isLoading, setIsLoading] = useState(false);
@@ -81,14 +87,33 @@ export function LoginModal() {
 		}
 	};
 
-	const handleClose = () => {
-		closeLoginModal();
-		resetAllState();
+	const handleClose = (nextOpen?: boolean) => {
+		// Required login: ignore dismiss attempts
+		if (forceOpen && !isLogin) {
+			openLoginModal();
+			return;
+		}
+		if (nextOpen === false || nextOpen === undefined) {
+			closeLoginModal();
+			resetAllState();
+		}
 	};
 
 	return (
-		<Dialog open={isLoginModalOpen} onOpenChange={handleClose}>
-			<DialogContent className="sm:max-w-md">
+		<Dialog open={open} onOpenChange={handleClose}>
+			<DialogContent
+				className="sm:max-w-md"
+				hideClose={forceOpen && !isLogin}
+				onPointerDownOutside={(e) => {
+					if (forceOpen && !isLogin) e.preventDefault();
+				}}
+				onEscapeKeyDown={(e) => {
+					if (forceOpen && !isLogin) e.preventDefault();
+				}}
+				onInteractOutside={(e) => {
+					if (forceOpen && !isLogin) e.preventDefault();
+				}}
+			>
 				<DialogHeader className="space-y-3">
 					<DialogTitle className="text-center font-bold text-2xl">{t("auth.welcomeBack")}</DialogTitle>
 					<DialogDescription className="text-center text-muted-foreground">

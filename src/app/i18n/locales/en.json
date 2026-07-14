@@ -222,7 +222,9 @@
 		"passwordTooLong": "Password too long",
 		"userAlreadyExists": "User already exists with this email address",
 		"noRegistration": "Public registration is disabled. Contact an admin for an account.",
-		"userBanned": "Your account has been banned. Contact an admin."
+		"userBanned": "Your account has been banned. Contact an admin.",
+		"loginRequired": "Sign in required",
+		"loginRequiredDesc": "Guest access is disabled. Accounts are issued by admins only."
 	},
 	"user": {
 		"avatar": "User avatar",
