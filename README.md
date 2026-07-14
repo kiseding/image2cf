@@ -77,6 +77,7 @@ CI 会在运行时把 `CLOUDFLARE_D1_DATABASE_ID` 注入到临时 `wrangler.toml
 | `ADMIN_USERNAME` | ✅ | 首个管理员用户名（用户表为空时自动创建） |
 | `ADMIN_PASSWORD` | ✅ | 首个管理员密码（建议用 Secret） |
 | `ADMIN_NAME` | | 显示名，默认 `Admin` |
+| `ADMIN_FORCE_RESET` | | 设为 `true` 可强制把管理员密码重置为 `ADMIN_PASSWORD`（修好后请删掉） |
 
 部署命令使用 `--keep-vars`，**不会覆盖** Dashboard 上已配置的变量/密钥。
 

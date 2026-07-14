@@ -1,7 +1,6 @@
 import { account, user } from "@/server/db/schemas";
-import { usernameToEmail } from "@/server/lib/auth";
+import { hashPassword, normalizeUsername, usernameToEmail } from "@/server/lib/auth";
 import { ServiceException } from "@/server/lib/exception";
-import { scryptSync } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import z from "zod/v4";
@@ -11,24 +10,7 @@ const UsernameSchema = z
 	.string()
 	.min(2)
 	.max(32)
-	.regex(/^[a-zA-Z0-9_\u4e00-\u9fa5.-]+$/, "Invalid username");
-
-async function hashPassword(password: string) {
-	const salt = crypto.getRandomValues(new Uint8Array(16));
-	const saltHex = Array.from(salt)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	const key = scryptSync(password.normalize("NFKC"), saltHex, 64, {
-		N: 16384,
-		r: 16,
-		p: 1,
-		maxmem: 128 * 16384 * 16 * 2,
-	});
-	const keyHex = Array.from(key)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return `${saltHex}:${keyHex}`;
-}
+	.regex(/^[a-zA-Z0-9_.-]+$/, "Invalid username");
 
 async function assertAdmin(ctx: RequestContext) {
 	const { db } = getContext();
@@ -71,9 +53,9 @@ const createUser = async (req: CreateUser, ctx: RequestContext) => {
 	await assertAdmin(ctx);
 	const { db } = getContext();
 
-	const username = req.username.trim();
+	const username = normalizeUsername(req.username);
 	const existing = await db.query.user.findFirst({
-		where: eq(user.username, username.toLowerCase()),
+		where: eq(user.username, username),
 	});
 	if (existing) {
 		throw new ServiceException("invalid_parameter", "Username already exists");
@@ -89,8 +71,8 @@ const createUser = async (req: CreateUser, ctx: RequestContext) => {
 		name: displayName,
 		email: usernameToEmail(username),
 		emailVerified: true,
-		username: username.toLowerCase(),
-		displayUsername: username,
+		username,
+		displayUsername: displayName,
 		role: req.role,
 		banned: false,
 		createdAt: now,

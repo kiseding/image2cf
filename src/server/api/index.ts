@@ -16,8 +16,6 @@ import relayRouter from "./routes/relay";
 import userRouter from "./routes/settings";
 import type { ApiResult, Env } from "./util";
 
-let bootstrapped = false;
-
 const factory = createFactory<Env>({
 	initApp: async (app) => {
 		app.use(async (c, next) => {
@@ -62,10 +60,8 @@ const factory = createFactory<Env>({
 				providerCloudflareBuiltin: c.env.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
 			});
 
-			if (!bootstrapped) {
-				bootstrapped = true;
-				await bootstrapAdmin(db, e as any);
-			}
+			// Always try bootstrap/repair admin (idempotent). Force password reset when ADMIN_FORCE_RESET=true.
+			await bootstrapAdmin(db, e as any);
 			await next();
 		});
 	},

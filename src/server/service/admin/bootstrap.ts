@@ -1,59 +1,92 @@
 import type { DrizzleDb } from "@/server/db";
 import { account, user } from "@/server/db/schemas";
-import { usernameToEmail } from "@/server/lib/auth";
+import { hashPassword, normalizeUsername, usernameToEmail } from "@/server/lib/auth";
 import { eq } from "drizzle-orm";
-import { scryptSync } from "node:crypto";
 import { nanoid } from "nanoid";
 
-async function hashPassword(password: string) {
-	const salt = crypto.getRandomValues(new Uint8Array(16));
-	const saltHex = Array.from(salt)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	const key = scryptSync(password.normalize("NFKC"), saltHex, 64, {
-		N: 16384,
-		r: 16,
-		p: 1,
-		maxmem: 128 * 16384 * 16 * 2,
-	});
-	const keyHex = Array.from(key)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return `${saltHex}:${keyHex}`;
-}
-
 /**
- * Create the first admin when user table is empty.
- * Prefer ADMIN_USERNAME; ADMIN_EMAIL is accepted as username for compatibility.
+ * Ensure bootstrap admin exists and can log in with username.
+ *
+ * Sources (first non-empty):
+ * - ADMIN_USERNAME
+ * - ADMIN_EMAIL (legacy; local-part used as username)
+ *
+ * Behaviors:
+ * 1. Empty DB → create admin
+ * 2. User exists with username → refresh password if ADMIN_PASSWORD set and ADMIN_FORCE_RESET=true
+ * 3. User exists by synthetic email / old email without username → backfill username + password
  */
 export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
 	const rawUsername = (env.ADMIN_USERNAME || env.ADMIN_EMAIL) as string | undefined;
 	const password = env.ADMIN_PASSWORD as string | undefined;
-	if (!rawUsername || !password) return;
+	if (!rawUsername || !password) {
+		console.log("[image2cf] Skip admin bootstrap: ADMIN_USERNAME/ADMIN_PASSWORD not set");
+		return;
+	}
 
-	// Allow legacy email-like value: take local part as username
 	const username = String(rawUsername).includes("@")
-		? String(rawUsername).split("@")[0]!.toLowerCase()
-		: String(rawUsername).toLowerCase();
+		? normalizeUsername(String(rawUsername).split("@")[0]!)
+		: normalizeUsername(String(rawUsername));
+
+	if (username.length < 2) {
+		console.error("[image2cf] ADMIN_USERNAME too short");
+		return;
+	}
+
+	const name = (env.ADMIN_NAME as string) || username;
+	const email = usernameToEmail(username);
+	const forceReset = String(env.ADMIN_FORCE_RESET || "").toLowerCase() === "true";
 
 	try {
-		const existing = await db.query.user.findFirst({
+		const byUsername = await db.query.user.findFirst({
 			where: eq(user.username, username),
 		});
-		if (existing) return;
 
-		const anyUser = await db.query.user.findFirst();
-		if (anyUser) return;
+		if (byUsername) {
+			if (forceReset) {
+				await resetCredentialPassword(db, byUsername.id, password);
+				console.log(`[image2cf] Reset password for admin: ${username}`);
+			} else {
+				console.log(`[image2cf] Admin already exists: ${username}`);
+			}
+			// ensure role admin
+			if (byUsername.role !== "admin") {
+				await db.update(user).set({ role: "admin", updatedAt: new Date() }).where(eq(user.id, byUsername.id));
+			}
+			return;
+		}
 
+		// Legacy: user created before username field, match synthetic/local email
+		const byEmail = await db.query.user.findFirst({
+			where: eq(user.email, email),
+		});
+		if (byEmail) {
+			await db
+				.update(user)
+				.set({
+					username,
+					displayUsername: name,
+					name: byEmail.name || name,
+					role: "admin",
+					emailVerified: true,
+					updatedAt: new Date(),
+				})
+				.where(eq(user.id, byEmail.id));
+			await resetCredentialPassword(db, byEmail.id, password);
+			console.log(`[image2cf] Backfilled username for existing user: ${username}`);
+			return;
+		}
+
+		// Only create when no users, OR always create this admin if missing
+		// (allow creating admin even if other users exist — needed after broken boots)
 		const userId = nanoid();
 		const now = new Date();
 		const passwordHash = await hashPassword(password);
-		const name = (env.ADMIN_NAME as string) || username;
 
 		await db.insert(user).values({
 			id: userId,
 			name,
-			email: usernameToEmail(username),
+			email,
 			emailVerified: true,
 			username,
 			displayUsername: name,
@@ -76,5 +109,29 @@ export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
 		console.log(`[image2cf] Bootstrapped admin user: ${username}`);
 	} catch (e) {
 		console.error("[image2cf] Failed to bootstrap admin:", e);
+	}
+}
+
+async function resetCredentialPassword(db: DrizzleDb, userId: string, password: string) {
+	const passwordHash = await hashPassword(password);
+	const now = new Date();
+	const existingAccount = await db.query.account.findFirst({
+		where: eq(account.userId, userId),
+	});
+	if (existingAccount) {
+		await db
+			.update(account)
+			.set({ password: passwordHash, providerId: "credential", updatedAt: now })
+			.where(eq(account.id, existingAccount.id));
+	} else {
+		await db.insert(account).values({
+			id: nanoid(),
+			accountId: userId,
+			providerId: "credential",
+			userId,
+			password: passwordHash,
+			createdAt: now,
+			updatedAt: now,
+		});
 	}
 }
