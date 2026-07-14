@@ -32,9 +32,12 @@ export function readWorkerEnv(env: Record<string, any> | undefined | null) {
 		AUTH_SOCIAL_GITHUB_CLIENT_ID: get("AUTH_SOCIAL_GITHUB_CLIENT_ID"),
 		AUTH_SOCIAL_GITHUB_CLIENT_SECRET: get("AUTH_SOCIAL_GITHUB_CLIENT_SECRET"),
 		COOKIE_DOMAIN: get("COOKIE_DOMAIN"),
-		// Keep raw env for D1 / AI bindings (not copied via spread)
+		FILE_STORAGE: get("FILE_STORAGE"),
+		DEBUG: get("DEBUG"),
+		// Keep raw env for D1 / AI / R2 bindings (not copied via spread)
 		raw: e,
 		DB: e.DB as D1Database | undefined,
 		AI: e.AI as Ai | undefined,
+		R2: e.R2 as R2Bucket | undefined,
 	};
 }

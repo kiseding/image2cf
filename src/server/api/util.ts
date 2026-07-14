@@ -33,6 +33,7 @@ export type Env = {
 	Bindings: {
 		DB: D1Database;
 		AI: Ai;
+		R2?: R2Bucket;
 		EMAIL: string;
 		RESEND_APIKEY: string;
 		PROVIDER_CLOUDFLARE_BUILTIN?: "true" | "false";
@@ -50,6 +51,9 @@ export type Env = {
 		AUTH_SOCIAL_GITHUB_CLIENT_SECRET?: string;
 		COOKIE_DOMAIN?: string;
 		MODE?: string;
+		FILE_STORAGE?: "base64" | "disk" | "r2";
+		/** Set to "true" to enable /api/debug/* */
+		DEBUG?: "true" | "false" | string;
 	};
 	Variables: {
 		db: DrizzleDb;

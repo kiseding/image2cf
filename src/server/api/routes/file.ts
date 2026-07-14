@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { getFileMetadata } from "@/server/service/file/storage";
+import { getFileMetadata, getR2Object } from "@/server/service/file/storage";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import { type Env, authMiddleware } from "../util";
@@ -24,12 +24,13 @@ const app = new Hono<Env>()
 		} else if (metadata.protocol === "file:") {
 			const suffix = metadata.accessUrl.split(".").pop();
 			contentType = `image/${suffix}`;
+		} else if (metadata.protocol === "r2:") {
+			contentType = "image/png";
 		}
 
 		// Set ETag and check cache
 		const etag = btoa(`"${user.id}-${fileId}"`);
 		c.header("ETag", etag);
-		c.header("Content-Type", contentType);
 		c.header("Cache-Control", "private, max-age=31536000");
 
 		if (c.req.header("If-None-Match") === etag) {
@@ -42,19 +43,34 @@ const app = new Hono<Env>()
 				if (!base64Header || !base64Data) {
 					return c.json({ error: "Invalid file data" }, 500);
 				}
+				contentType = base64Header.split(";")[0]?.split(":")[1] || "image/png";
+				c.header("Content-Type", contentType);
 				return stream(c, async (stream) => {
 					const buffer = Buffer.from(base64Data, "base64");
 					await stream.write(buffer);
 				});
 			}
+			case "r2:": {
+				const obj = await getR2Object(metadata.accessUrl);
+				if (!obj) {
+					return c.json({ error: "R2 object not found" }, 404);
+				}
+				contentType = obj.httpMetadata?.contentType || "image/png";
+				c.header("Content-Type", contentType);
+				const buf = new Uint8Array(await obj.arrayBuffer());
+				return stream(c, async (stream) => {
+					await stream.write(buf);
+				});
+			}
 			case "file:": {
+				c.header("Content-Type", contentType);
 				const fileBuffer = await fs.readFile(metadata.accessUrl);
 				return stream(c, async (stream) => {
 					await stream.write(fileBuffer);
 				});
 			}
 			default: {
-				// For other protocols, we assume it's a URL and redirect
+				// Remote URL — redirect
 				return c.redirect(metadata.accessUrl);
 			}
 		}

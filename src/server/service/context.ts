@@ -5,11 +5,16 @@ import type { DrizzleDb } from "../db";
 interface ServiceContext {
 	db: DrizzleDb;
 	AI?: Ai;
+	/** Cloudflare R2 bucket binding */
+	R2?: R2Bucket;
 	resend?: {
 		instance: Resend;
 		from: string;
 	};
 	providerCloudflareBuiltin?: boolean;
+	/** DEBUG=true */
+	debug?: boolean;
+	fileStorage?: string;
 }
 
 let serviceContext: ServiceContext | null = null;

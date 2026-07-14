@@ -19,7 +19,18 @@ migrations_dir = "drizzle/migrations"
 [ai]
 binding = "AI"
 
+# R2 object storage for generated images (avoids D1 base64 size limits)
+# Create bucket once: wrangler r2 bucket create image2cf
+# Override name at deploy via secret CLOUDFLARE_R2_BUCKET_NAME
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "image2cf"
+
 [vars]
+# File storage: base64 | r2 (default r2 when R2 binding present)
+FILE_STORAGE = "r2"
+# Set DEBUG=true (Dashboard var or secret) to enable /api/debug/*
+# DEBUG = "false"
 # Application deployment mode configuration
 # 
 # client: Client-only mode - operates entirely on the client-side with no authentication required.

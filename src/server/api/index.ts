@@ -14,6 +14,7 @@ import chatsRouter from "./routes/chat";
 import fileRouter from "./routes/file";
 import loginRouter from "./routes/login";
 import relayRouter from "./routes/relay";
+import debugRouter from "./routes/debug";
 import setupRouter from "./routes/setup";
 import userRouter from "./routes/settings";
 import type { ApiResult, Env } from "./util";
@@ -58,9 +59,17 @@ const factory = createFactory<Env>({
 					secret: (c.env as any).BETTER_AUTH_SECRET || e.ADMIN_PASSWORD || undefined,
 				}),
 			);
+			// Make FILE_STORAGE visible to storage resolver (Workers have no process.env by default)
+			if (e.FILE_STORAGE) {
+				(process.env as any).FILE_STORAGE = e.FILE_STORAGE;
+			} else if (e.R2) {
+				(process.env as any).FILE_STORAGE = "r2";
+			}
+
 			initContext({
 				db,
 				AI: c.env.AI,
+				R2: e.R2 || (c.env as any).R2,
 				resend: authConfig.email.verification
 					? {
 							instance: new Resend(authConfig.email.resend.apiKey),
@@ -68,6 +77,8 @@ const factory = createFactory<Env>({
 						}
 					: undefined,
 				providerCloudflareBuiltin: e.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
+				debug: e.DEBUG === "true",
+				fileStorage: e.FILE_STORAGE || (e.R2 ? "r2" : "base64"),
 			});
 
 			await bootstrapAdmin(db, {
@@ -150,7 +161,8 @@ const route = app
 	.route("/", aiRouter)
 	.route("/", fileRouter)
 	.route("/", adminRouter)
-	.route("/", relayRouter);
+	.route("/", relayRouter)
+	.route("/", debugRouter);
 
 export type AppType = typeof route;
 export default app;
