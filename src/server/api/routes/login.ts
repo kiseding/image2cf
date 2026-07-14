@@ -204,17 +204,23 @@ async function createDbSession(d1: D1Database, userId: string, userAgent?: strin
 	return { id, token, expiresAt };
 }
 
+/**
+ * better-call signed cookie format:
+ * encodeURIComponent(`${token}.${btoa(hmacSha256)}`)
+ * signature must be standard base64, length 44, ends with '='
+ */
 async function buildSignedSessionCookie(auth: any, token: string) {
 	const ctx = await auth.$context;
 	const secret = ctx.secret as string;
-	const cookieName = (ctx.authCookies?.sessionToken?.name as string) || "__Secure-better-auth.session_token";
-	const signature = await hmacSignBase64UrlNoPad(secret, token);
-	const value = `${token}.${signature}`;
+	const cookieName =
+		(ctx.authCookies?.sessionToken?.name as string) || "__Secure-better-auth.session_token";
+	const signature = await hmacSignBase64(secret, token);
+	const signedValue = encodeURIComponent(`${token}.${signature}`);
 	const maxAge = 60 * 60 * 24 * 7;
-	return `${cookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+	return `${cookieName}=${signedValue}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
-async function hmacSignBase64UrlNoPad(secret: string, data: string) {
+async function hmacSignBase64(secret: string, data: string) {
 	const key = await crypto.subtle.importKey(
 		"raw",
 		new TextEncoder().encode(secret),
@@ -226,7 +232,8 @@ async function hmacSignBase64UrlNoPad(secret: string, data: string) {
 	const bytes = new Uint8Array(sig);
 	let binary = "";
 	for (const b of bytes) binary += String.fromCharCode(b);
-	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+	// standard base64 WITH padding
+	return btoa(binary);
 }
 
 export default app;
