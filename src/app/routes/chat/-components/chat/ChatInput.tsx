@@ -16,9 +16,27 @@ interface ChatInputProps {
 	disabled?: boolean;
 	currentProvider?: string;
 	currentModel?: string;
+	/** External image URLs to attach (from previous generations) */
+	referenceImageUrls?: string[];
+	onReferenceImagesChange?: (urls: string[]) => void;
 }
 
-export function ChatInput({ onSendMessage, disabled, currentProvider, currentModel }: ChatInputProps) {
+async function urlToFile(url: string, filename: string): Promise<File> {
+	const response = await fetch(url);
+	const blob = await response.blob();
+	const type = blob.type || "image/png";
+	const ext = type.split("/")[1] || "png";
+	return new File([blob], filename.endsWith(`.${ext}`) ? filename : `${filename}.${ext}`, { type });
+}
+
+export function ChatInput({
+	onSendMessage,
+	disabled,
+	currentProvider,
+	currentModel,
+	referenceImageUrls,
+	onReferenceImagesChange,
+}: ChatInputProps) {
 	const { t } = useTranslation();
 	const { toast } = useToast();
 	const [message, setMessage] = useState("");
@@ -33,18 +51,26 @@ export function ChatInput({ onSendMessage, disabled, currentProvider, currentMod
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const isComposingRef = useRef(false);
+	const mergingRef = useRef(false);
 
 	// Get current model capability and max images
 	const { currentModelCapability, maxImages } = (() => {
 		if (!currentProvider || !currentModel) return { currentModelCapability: null, maxImages: 1 };
 
 		try {
-			const model = getModelById(currentProvider, currentModel);
+			const model = getModelById(currentProvider, currentModel) as {
+				ability: "t2i" | "i2i";
+				maxInputImages?: number;
+			};
 			return {
 				currentModelCapability: model.ability,
 				maxImages: model.ability === "i2i" ? model.maxInputImages || 1 : 1,
 			};
 		} catch {
+			// Relay models default to i2i for reference image support
+			if (currentProvider.startsWith("relay:")) {
+				return { currentModelCapability: "i2i" as const, maxImages: 3 };
+			}
 			return { currentModelCapability: null, maxImages: 1 };
 		}
 	})();
@@ -57,10 +83,11 @@ export function ChatInput({ onSendMessage, disabled, currentProvider, currentMod
 		if (!canUploadImages && selectedImages.length > 0) {
 			// Clean up preview URLs
 			for (const url of previewUrls) {
-				if (url) URL.revokeObjectURL(url);
+				if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
 			}
 			setSelectedImages([]);
 			setPreviewUrls([]);
+			onReferenceImagesChange?.([]);
 
 			// Show toast to inform user
 			if (currentModelCapability === "t2i") {
@@ -71,7 +98,63 @@ export function ChatInput({ onSendMessage, disabled, currentProvider, currentMod
 				});
 			}
 		}
-	}, [canUploadImages, currentModelCapability, selectedImages.length, previewUrls, toast, t]);
+	}, [canUploadImages, currentModelCapability, selectedImages.length, previewUrls, toast, t, onReferenceImagesChange]);
+
+	// Merge external reference image URLs (from previous generations) into selected images
+	useEffect(() => {
+		if (!referenceImageUrls || referenceImageUrls.length === 0 || mergingRef.current) return;
+		if (!canUploadImages) {
+			toast({
+				title: t("chat.modelChanged"),
+				description: t("chat.textToImageOnlyModel"),
+				variant: "default",
+			});
+			onReferenceImagesChange?.([]);
+			return;
+		}
+
+		const merge = async () => {
+			mergingRef.current = true;
+			try {
+				const availableSlots = maxImages - selectedImages.length;
+				if (availableSlots <= 0) {
+					toast({
+						title: t("chat.maxImagesReached"),
+						description: t("chat.onlyAddedImages", { added: 0, selected: referenceImageUrls.length }),
+						variant: "destructive",
+					});
+					onReferenceImagesChange?.([]);
+					return;
+				}
+
+				const urlsToAdd = referenceImageUrls.slice(0, availableSlots);
+				const files: File[] = [];
+				const urls: string[] = [];
+				for (let i = 0; i < urlsToAdd.length; i++) {
+					const url = urlsToAdd[i]!;
+					try {
+						const file = await urlToFile(url, `ref-${Date.now()}-${i}`);
+						files.push(file);
+						urls.push(url);
+					} catch (e) {
+						console.error("Failed to load reference image:", e);
+					}
+				}
+				if (files.length > 0) {
+					setSelectedImages((prev) => [...prev, ...files]);
+					setPreviewUrls((prev) => [...prev, ...urls]);
+					toast({
+						title: t("chat.referenceAdded"),
+						description: t("chat.referenceAddedDesc", { count: files.length }),
+					});
+				}
+			} finally {
+				onReferenceImagesChange?.([]);
+				mergingRef.current = false;
+			}
+		};
+		merge();
+	}, [referenceImageUrls, canUploadImages, maxImages, selectedImages.length, toast, t, onReferenceImagesChange]);
 
 	// Monitor disabled state changes and restore focus when re-enabled
 	useEffect(() => {
@@ -164,9 +247,10 @@ export function ChatInput({ onSendMessage, disabled, currentProvider, currentMod
 	};
 
 	const handleRemoveImage = (index: number) => {
-		// Clean up preview URL
-		if (previewUrls[index]) {
-			URL.revokeObjectURL(previewUrls[index]);
+		// Clean up preview URL only for blob URLs we created
+		const url = previewUrls[index];
+		if (url?.startsWith("blob:")) {
+			URL.revokeObjectURL(url);
 		}
 
 		setSelectedImages((prev) => prev.filter((_, i) => i !== index));

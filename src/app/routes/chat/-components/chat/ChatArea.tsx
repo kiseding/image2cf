@@ -25,6 +25,7 @@ interface ChatAreaProps {
 	onMessageUpdate?: (messageId: string, updates: Partial<ChatData["messages"][0]>) => void;
 	onRetry?: (messageId: string) => Promise<void>;
 	onDeleteMessage?: (messageId: string) => Promise<void>;
+	onUseAsReference?: (imageUrls: string[]) => void;
 	// Fallback values when there's no current chat
 	fallbackProvider?: string;
 	fallbackModel?: string;
@@ -45,6 +46,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
 			onMessageUpdate,
 			onRetry,
 			onDeleteMessage,
+			onUseAsReference,
 			fallbackProvider,
 			fallbackModel,
 		},
@@ -233,6 +235,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
 													onMessageUpdate={onMessageUpdate}
 													onRetry={onRetry}
 													onDelete={onDeleteMessage}
+													onUseAsReference={onUseAsReference}
 												/>
 											</div>
 										);

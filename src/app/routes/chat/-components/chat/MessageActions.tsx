@@ -1,7 +1,7 @@
 import { Button } from "@/app/components/ui/button";
 import { cn } from "@/app/lib/utils";
 import JSZip from "jszip";
-import { Check, Copy, Download, Loader2, Trash2, X } from "lucide-react";
+import { Check, Copy, Download, ImagePlus, Loader2, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -14,6 +14,8 @@ interface MessageActionsProps {
 	imageUrls?: string[];
 	isUser: boolean;
 	onDelete?: (messageId: string) => void;
+	/** Use generated/uploaded images as i2i references */
+	onUseAsReference?: (imageUrls: string[]) => void;
 	className?: string;
 }
 
@@ -24,6 +26,7 @@ export function MessageActions({
 	imageUrls,
 	isUser,
 	onDelete,
+	onUseAsReference,
 	className,
 }: MessageActionsProps) {
 	const { t } = useTranslation();
@@ -134,8 +137,8 @@ export function MessageActions({
 			// Set filename: single image doesn't need index, multiple images include index
 			const filename =
 				imageUrls?.length === 1
-					? `typix-image-${timestamp}.${extension}`
-					: `typix-image-${timestamp}-${index + 1}.${extension}`;
+					? `image2cf-${timestamp}.${extension}`
+					: `image2cf-${timestamp}-${index + 1}.${extension}`;
 
 			link.download = filename;
 
@@ -230,7 +233,7 @@ export function MessageActions({
 
 			const link = document.createElement("a");
 			link.href = zipUrl;
-			link.download = `typix-images-${timestamp}.zip`;
+			link.download = `image2cfs-${timestamp}.zip`;
 			link.style.display = "none";
 
 			document.body.appendChild(link);
@@ -315,6 +318,19 @@ export function MessageActions({
 					title={t("chat.actions.download")}
 				>
 					{getIconForState(downloadState, Download)}
+				</Button>
+			)}
+
+			{/* Use as reference for i2i */}
+			{imageUrls && imageUrls.length > 0 && onUseAsReference && (
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-8 w-8 hover:bg-muted/80"
+					onClick={() => onUseAsReference(imageUrls)}
+					title={t("chat.actions.useAsReference")}
+				>
+					<ImagePlus className="h-4 w-4" />
 				</Button>
 			)}
 

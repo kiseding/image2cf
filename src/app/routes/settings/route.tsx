@@ -1,9 +1,10 @@
 import { useIsMobile } from "@/app/hooks/useMobile";
+import { useAdminService } from "@/app/hooks/useService";
+import { useAuth } from "@/app/hooks/useAuth";
 import { SettingsNavigation } from "@/app/routes/settings/-components/SettingsNavigation";
 import { findSectionById, getDefaultSection, isValidSectionId, settingsSections } from "@/app/routes/settings/-config";
 import { Outlet, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
-import { LucideSettings } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 export const Route = createFileRoute("/settings")({
@@ -15,6 +16,15 @@ function SettingsLayoutComponent() {
 	const navigate = useNavigate();
 	const router = useRouter();
 	const { t } = useTranslation();
+	const { isLogin } = useAuth();
+	const adminService = useAdminService();
+	const { data: me } = adminService.getMe.swr(isLogin ? "admin-me" : null);
+	const isAdmin = me?.role === "admin";
+
+	const visibleSections = useMemo(
+		() => settingsSections.filter((s) => (s.id === "users" ? isAdmin : true)),
+		[isAdmin],
+	);
 
 	// Get current active section from the current route
 	const currentPath = router.state.location.pathname;
@@ -38,7 +48,7 @@ function SettingsLayoutComponent() {
 	useEffect(() => {
 		const newActiveSection = getActiveSectionFromPath(currentPath);
 		setActiveSection(newActiveSection);
-	}, [currentPath, settingsSections]);
+	}, [currentPath]);
 
 	// Navigate to a section
 	const navigateToSection = (sectionId: string) => {
@@ -76,7 +86,7 @@ function SettingsLayoutComponent() {
 				{/* Navigation Menu */}
 				<div className="flex-1 p-4">
 					<SettingsNavigation
-						sections={settingsSections}
+						sections={visibleSections}
 						activeSection={activeSection}
 						onSectionChange={navigateToSection}
 						className="h-full"

@@ -1,5 +1,5 @@
 {
-	"name": "typix-image",
+	"name": "image2cf",
 	"private": true,
 	"version": "1.0.9",
 	"type": "module",
@@ -14,8 +14,8 @@
 		"preview": "vite preview",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
-		"db:migrate:dev:worker": "wrangler d1 migrations apply --local typix",
-		"db:migrate:worker": "wrangler d1 migrations apply --remote typix",
+		"db:migrate:dev:worker": "wrangler d1 migrations apply --local image2cf",
+		"db:migrate:worker": "wrangler d1 migrations apply --remote image2cf",
 		"db:push": "drizzle-kit push",
 		"db:studio": "drizzle-kit studio",
 		"deploy": "npm run db:migrate:worker && wrangler deploy",

@@ -6,39 +6,46 @@ import { Resend } from "resend";
 import { createDb } from "../db";
 import { type AuthConfig, createAuth } from "../lib/auth";
 import { ServiceException } from "../lib/exception";
+import { bootstrapAdmin } from "../service/admin/bootstrap";
 import { initContext } from "../service/context";
+import adminRouter from "./routes/admin";
 import aiRouter from "./routes/ai";
 import chatsRouter from "./routes/chat";
 import fileRouter from "./routes/file";
+import relayRouter from "./routes/relay";
 import userRouter from "./routes/settings";
 import type { ApiResult, Env } from "./util";
+
+let bootstrapped = false;
 
 const factory = createFactory<Env>({
 	initApp: async (app) => {
 		app.use(async (c, next) => {
 			const db = await createDb(c.env.DB);
 			// env(c) are both compatible with Cloudflare Workers(wrangler.toml) and Node.js(.env)
+			const e = env(c);
 			const authConfig: AuthConfig = {
 				email: {
-					verification: env(c).AUTH_EMAIL_VERIFICATION_ENABLED === "true",
+					verification: e.AUTH_EMAIL_VERIFICATION_ENABLED === "true",
 					resend: {
-						apiKey: env(c).AUTH_EMAIL_RESEND_API_KEY || "",
-						from: env(c).AUTH_EMAIL_RESEND_FROM || "",
+						apiKey: e.AUTH_EMAIL_RESEND_API_KEY || "",
+						from: e.AUTH_EMAIL_RESEND_FROM || "",
 					},
 				},
 				social: {
 					google: {
-						enabled: env(c).AUTH_SOCIAL_GOOGLE_ENABLED === "true",
-						clientId: env(c).AUTH_SOCIAL_GOOGLE_CLIENT_ID || "",
-						clientSecret: env(c).AUTH_SOCIAL_GOOGLE_CLIENT_SECRET || "",
+						enabled: e.AUTH_SOCIAL_GOOGLE_ENABLED === "true",
+						clientId: e.AUTH_SOCIAL_GOOGLE_CLIENT_ID || "",
+						clientSecret: e.AUTH_SOCIAL_GOOGLE_CLIENT_SECRET || "",
 					},
 					github: {
-						enabled: env(c).AUTH_SOCIAL_GITHUB_ENABLED === "true",
-						clientId: env(c).AUTH_SOCIAL_GITHUB_CLIENT_ID || "",
-						clientSecret: env(c).AUTH_SOCIAL_GITHUB_CLIENT_SECRET || "",
+						enabled: e.AUTH_SOCIAL_GITHUB_ENABLED === "true",
+						clientId: e.AUTH_SOCIAL_GITHUB_CLIENT_ID || "",
+						clientSecret: e.AUTH_SOCIAL_GITHUB_CLIENT_SECRET || "",
 					},
 				},
-				cookieDomain: env(c).COOKIE_DOMAIN ? String(env(c).COOKIE_DOMAIN) : undefined,
+				cookieDomain: e.COOKIE_DOMAIN ? String(e.COOKIE_DOMAIN) : undefined,
+				disableSignUp: true,
 			};
 
 			c.set("db", db);
@@ -54,6 +61,11 @@ const factory = createFactory<Env>({
 					: undefined,
 				providerCloudflareBuiltin: c.env.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
 			});
+
+			if (!bootstrapped) {
+				bootstrapped = true;
+				await bootstrapAdmin(db, e as any);
+			}
 			await next();
 		});
 	},
@@ -74,8 +86,8 @@ app.use("*", async (c, next) => {
 		return await next();
 	}
 
-	c.set("user", session.user);
-	c.set("session", session.session);
+	c.set("user", session.user as any);
+	c.set("session", session.session as any);
 	return await next();
 });
 
@@ -125,7 +137,9 @@ const route = app
 	.route("/", chatsRouter)
 	.route("/", userRouter)
 	.route("/", aiRouter)
-	.route("/", fileRouter);
+	.route("/", fileRouter)
+	.route("/", adminRouter)
+	.route("/", relayRouter);
 
 export type AppType = typeof route;
 export default app;

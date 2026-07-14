@@ -1,4 +1,4 @@
-import { Bot, Settings2 } from "lucide-react";
+import { Bot, Network, Settings2, Users } from "lucide-react";
 import type { SettingsSection } from "../-components/SettingsNavigation";
 
 /**
@@ -18,6 +18,18 @@ export const settingsSections: SettingsSection[] = [
 		title: "settings.sections.provider", // i18n key
 		icon: Bot,
 		path: "/settings/provider",
+	},
+	{
+		id: "relay",
+		title: "settings.sections.relay", // i18n key
+		icon: Network,
+		path: "/settings/relay",
+	},
+	{
+		id: "users",
+		title: "settings.sections.users", // i18n key
+		icon: Users,
+		path: "/settings/users",
 	},
 ];
 

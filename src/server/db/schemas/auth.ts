@@ -8,6 +8,12 @@ export const user = sqliteTable("user", {
 		.$defaultFn(() => false)
 		.notNull(),
 	image: text("image"),
+	role: text("role", { enum: ["admin", "user"] })
+		.$defaultFn(() => "user")
+		.notNull(),
+	banned: integer("banned", { mode: "boolean" })
+		.$defaultFn(() => false)
+		.notNull(),
 	createdAt: integer("created_at", { mode: "timestamp" })
 		.$defaultFn(() => /* @__PURE__ */ new Date())
 		.notNull(),

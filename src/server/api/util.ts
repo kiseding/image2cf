@@ -6,6 +6,29 @@ import type { Code } from "../lib/exception";
 
 type Auth = ReturnType<typeof createAuth>;
 
+export type AuthUser = {
+	id: string;
+	name: string;
+	email: string;
+	emailVerified: boolean;
+	image?: string | null;
+	createdAt: Date;
+	updatedAt: Date;
+	role?: string;
+	banned?: boolean;
+};
+
+export type AuthSession = {
+	id: string;
+	userId: string;
+	token: string;
+	expiresAt: Date;
+	createdAt: Date;
+	updatedAt: Date;
+	ipAddress?: string | null;
+	userAgent?: string | null;
+};
+
 export type Env = {
 	Bindings: {
 		DB: D1Database;
@@ -26,8 +49,8 @@ export type Env = {
 	Variables: {
 		db: DrizzleDb;
 		auth: Auth;
-		user: Auth["$Infer"]["Session"]["user"] | null;
-		session: Auth["$Infer"]["Session"]["session"] | null;
+		user: AuthUser | null;
+		session: AuthSession | null;
 	};
 };
 

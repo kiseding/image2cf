@@ -1,8 +1,10 @@
 import type { ApiResult } from "@/server/api/util";
 import { ServiceException } from "@/server/lib/exception";
+import { adminService } from "@/server/service/admin";
 import { aiService } from "@/server/service/ai";
 import { chatService } from "@/server/service/chat";
 import { type RequestContext, localUserId } from "@/server/service/context";
+import { relayService } from "@/server/service/relay";
 import { settingsService } from "@/server/service/settings";
 import { useMemo } from "react";
 import useSWR from "swr";
@@ -209,4 +211,14 @@ export function useSettingsService() {
 export function useAiService() {
 	const apiService = useMemo(() => createApiServiceProxy<typeof aiService>(apiClient.api.ai), []);
 	return useService(aiService, apiService);
+}
+
+export function useAdminService() {
+	const apiService = useMemo(() => createApiServiceProxy<typeof adminService>(apiClient.api.admin), []);
+	return useService(adminService, apiService);
+}
+
+export function useRelayService() {
+	const apiService = useMemo(() => createApiServiceProxy<typeof relayService>(apiClient.api.relay), []);
+	return useService(relayService, apiService);
 }

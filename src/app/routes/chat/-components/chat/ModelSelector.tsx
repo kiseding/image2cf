@@ -24,11 +24,14 @@ export function ModelSelector({ currentProvider, currentModel, onModelChange, is
 	const model = provider?.models.find((m) => m.id === currentModel);
 	const displayName = model?.name || currentModel;
 
-	// Create a combined value for the select (provider:model)
-	const currentValue = `${currentProvider}:${currentModel}`;
+	// Use ||| separator because relay provider ids contain colons (relay:<id>)
+	const currentValue = `${currentProvider}|||${currentModel}`;
 
 	const handleValueChange = (value: string) => {
-		const [provider, model] = value.split(":");
+		const sep = value.indexOf("|||");
+		if (sep === -1) return;
+		const provider = value.slice(0, sep);
+		const model = value.slice(sep + 3);
 		if (provider && model) {
 			onModelChange(provider, model);
 		}
@@ -67,13 +70,23 @@ export function ModelSelector({ currentProvider, currentModel, onModelChange, is
 							<div key={provider.id}>
 								{/* Provider group header */}
 								<div className="flex items-center gap-2 px-2 py-1.5 font-medium text-muted-foreground text-sm">
-									<ProviderIcon provider={provider.id} type="mono" className="h-4 w-4" />
+									{provider.id.startsWith("relay:") ? (
+										<span className="flex h-4 w-4 items-center justify-center rounded bg-primary/15 text-[10px] font-bold text-primary">
+											R
+										</span>
+									) : (
+										<ProviderIcon provider={provider.id} type="mono" className="h-4 w-4" />
+									)}
 									{provider.name}
 								</div>
 
 								{/* Models for this provider */}
 								{provider.models.map((model) => (
-									<SelectItem key={`${provider.id}:${model.id}`} value={`${provider.id}:${model.id}`} className="pl-8">
+									<SelectItem
+										key={`${provider.id}|||${model.id}`}
+										value={`${provider.id}|||${model.id}`}
+										className="pl-8"
+									>
 										{model.name}
 									</SelectItem>
 								))}

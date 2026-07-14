@@ -38,22 +38,22 @@ const getEnabledAiProvidersWithModels = async (ctx: RequestContext) => {
 	const { userId } = ctx;
 
 	const providers = (await getAiProviders(ctx)).filter((provider) => provider.enabled);
-	if (providers.length === 0) {
-		return [];
-	}
 
-	const userAiModels = await db.query.aiModels.findMany({
-		where: and(
-			eq(aiModels.userId, userId),
-			eq(aiModels.enabled, true),
-			inArray(
-				aiModels.providerId,
-				providers.map((p) => p.id),
-			),
-		),
-	});
+	const userAiModels =
+		providers.length > 0
+			? await db.query.aiModels.findMany({
+					where: and(
+						eq(aiModels.userId, userId),
+						eq(aiModels.enabled, true),
+						inArray(
+							aiModels.providerId,
+							providers.map((p) => p.id),
+						),
+					),
+				})
+			: [];
 
-	return providers
+	const systemProviders = providers
 		.map((provider) => {
 			const userProviderModels = userAiModels.filter((m) => m.providerId === provider.id);
 			const combineAiModels = provider.models
@@ -71,6 +71,12 @@ const getEnabledAiProvidersWithModels = async (ctx: RequestContext) => {
 			};
 		})
 		.filter((provider) => provider.models.length > 0);
+
+	// Merge user-defined relay stations as virtual providers
+	const { relayService } = await import("../relay");
+	const relayProviders = await relayService.getEnabledRelaysAsProviders(ctx);
+
+	return [...systemProviders, ...relayProviders];
 };
 
 export const GetAiProviderByIdSchema = z.object({

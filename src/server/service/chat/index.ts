@@ -1,4 +1,5 @@
 import { getProviderById } from "@/server/ai/provider";
+import { generateViaRelay } from "@/server/ai/provider/relay";
 import { type ApiProviderSettings, ConfigInvalidError } from "@/server/ai/types/provider";
 import { chats, messageAttachments, messageGenerations, messages } from "@/server/db/schemas";
 import { createSchemaOmits } from "@/server/db/util";
@@ -10,6 +11,7 @@ import z from "zod/v4";
 import { aiService } from "../ai";
 import { type RequestContext, getContext } from "../context";
 import { getFileData, getFileUrl, saveFiles } from "../file/storage";
+import { relayService } from "../relay";
 
 export const CreateChatSchema = createInsertSchema(chats)
 	.pick({
@@ -211,10 +213,18 @@ const updateChat = async (req: UpdateChat, ctx: RequestContext) => {
 
 	// Validate provider and model if provided
 	if (req.provider && req.model) {
-		const providerInstance = getProviderById(req.provider);
-		const modelExists = providerInstance.models.some((m) => m.id === req.model);
-		if (!modelExists) {
-			throw new ServiceException("invalid_parameter", "Model not found for the specified provider");
+		if (req.provider.startsWith("relay:")) {
+			const relay = await relayService.resolveRelayForGeneration(req.provider, ctx);
+			const modelExists = relay?.models.some((m) => m.id === req.model);
+			if (!modelExists) {
+				throw new ServiceException("invalid_parameter", "Model not found for the specified relay");
+			}
+		} else {
+			const providerInstance = getProviderById(req.provider);
+			const modelExists = providerInstance.models.some((m) => m.id === req.model);
+			if (!modelExists) {
+				throw new ServiceException("invalid_parameter", "Model not found for the specified provider");
+			}
 		}
 	}
 
@@ -334,24 +344,28 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 	} = params;
 
 	try {
-		const providerInstance = getProviderById(providerId);
-		const provider = await aiService.getAiProviderById({ providerId }, ctx);
-		const settings =
-			provider?.settings?.reduce((acc, setting) => {
-				const value = setting.value ?? setting.defaultValue;
-				if (value !== undefined) {
-					acc[setting.key] = value;
-				}
-				return acc;
-			}, {} as ApiProviderSettings) ?? {};
+		const isRelay = providerId.startsWith("relay:");
+		let modelAbility: "t2i" | "i2i" = "t2i";
+		let maxInputImages = 1;
 
-		const model = providerInstance.models.find((m) => m.id === modelId);
+		if (isRelay) {
+			const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
+			const model = relay?.models.find((m) => m.id === modelId);
+			modelAbility = (model?.ability as "t2i" | "i2i") || "i2i";
+			maxInputImages = model?.maxInputImages || 1;
+		} else {
+			const providerInstance = getProviderById(providerId);
+			const model = providerInstance.models.find((m) => m.id === modelId);
+			modelAbility = model?.ability || "t2i";
+			maxInputImages = (model as any)?.maxInputImages || 1;
+		}
+
 		let referImages: string[] | undefined;
 
 		// Always use user uploaded images if provided
 		if (userImages && userImages.length > 0) {
 			referImages = userImages;
-		} else if (model?.ability !== "t2i") {
+		} else if (modelAbility !== "t2i") {
 			// If no user images and model supports image edit, refer to last message's images
 			const lastMessageImage = async () => {
 				const whereConditions = [
@@ -378,18 +392,13 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				});
 				const fileIds = lastMessage?.generation?.fileIds as string[] | null;
 				if (fileIds && fileIds.length > 0) {
-					switch (model?.ability) {
-						case "i2i": {
-							// For i2i models, use appropriate number of images based on maxInputImages
-							const maxImages = model.maxInputImages || 1;
-							if (maxImages === 1) {
-								// For single image edit, use the last image
-								return [await getFileData(fileIds[fileIds.length - 1]!, userId)].filter(Boolean) as string[];
-							}
-							// For multi image edit, use all images up to the limit
-							const imagesToUse = fileIds.slice(-maxImages);
-							return (await Promise.all(imagesToUse.map((id) => getFileData(id, userId)))).filter(Boolean) as string[];
+					if (modelAbility === "i2i") {
+						const maxImages = maxInputImages || 1;
+						if (maxImages === 1) {
+							return [await getFileData(fileIds[fileIds.length - 1]!, userId)].filter(Boolean) as string[];
 						}
+						const imagesToUse = fileIds.slice(-maxImages);
+						return (await Promise.all(imagesToUse.map((id) => getFileData(id, userId)))).filter(Boolean) as string[];
 					}
 				}
 			};
@@ -398,17 +407,37 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		}
 
 		const now = new Date();
-		const result = await providerInstance.generate(
-			{
-				providerId,
+		const generateRequest = {
+			providerId,
+			modelId,
+			prompt,
+			images: referImages,
+			n: imageCount || 1,
+			aspectRatio: aspectRatio as any,
+		};
+
+		let result;
+		if (isRelay) {
+			const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
+			result = await generateViaRelay(generateRequest, {
+				type: relay!.type,
+				baseURL: relay!.baseURL,
+				apiKey: relay!.apiKey,
 				modelId,
-				prompt,
-				images: referImages,
-				n: imageCount || 1, // Pass the image count to provider
-				aspectRatio: aspectRatio as any, // Pass the aspect ratio to provider
-			},
-			settings,
-		);
+			});
+		} else {
+			const providerInstance = getProviderById(providerId);
+			const provider = await aiService.getAiProviderById({ providerId }, ctx);
+			const settings =
+				provider?.settings?.reduce((acc, setting) => {
+					const value = setting.value ?? setting.defaultValue;
+					if (value !== undefined) {
+						acc[setting.key] = value;
+					}
+					return acc;
+				}, {} as ApiProviderSettings) ?? {};
+			result = await providerInstance.generate(generateRequest, settings);
+		}
 		if (result.errorReason) {
 			await db
 				.update(messageGenerations)

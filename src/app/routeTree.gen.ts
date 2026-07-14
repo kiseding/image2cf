@@ -19,6 +19,8 @@ import { Route as SettingsCommonImport } from './routes/settings/common'
 import { Route as SettingsProviderRouteImport } from './routes/settings/provider/route'
 import { Route as SettingsProviderIndexImport } from './routes/settings/provider/index'
 import { Route as SettingsProviderProviderIdImport } from './routes/settings/provider/$providerId'
+import { Route as SettingsRelayImport } from './routes/settings/relay'
+import { Route as SettingsUsersImport } from './routes/settings/users'
 
 // Create/Update Routes
 
@@ -49,6 +51,18 @@ const ChatIndexRoute = ChatIndexImport.update({
 const SettingsCommonRoute = SettingsCommonImport.update({
   id: '/common',
   path: '/common',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+
+const SettingsRelayRoute = SettingsRelayImport.update({
+  id: '/relay',
+  path: '/relay',
+  getParentRoute: () => SettingsRouteRoute,
+} as any)
+
+const SettingsUsersRoute = SettingsUsersImport.update({
+  id: '/users',
+  path: '/users',
   getParentRoute: () => SettingsRouteRoute,
 } as any)
 
@@ -104,6 +118,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsCommonImport
       parentRoute: typeof SettingsRouteImport
     }
+    '/settings/relay': {
+      id: '/settings/relay'
+      path: '/relay'
+      fullPath: '/settings/relay'
+      preLoaderRoute: typeof SettingsRelayImport
+      parentRoute: typeof SettingsRouteImport
+    }
+    '/settings/users': {
+      id: '/settings/users'
+      path: '/users'
+      fullPath: '/settings/users'
+      preLoaderRoute: typeof SettingsUsersImport
+      parentRoute: typeof SettingsRouteImport
+    }
     '/chat/': {
       id: '/chat/'
       path: '/chat'
@@ -155,12 +183,16 @@ const SettingsProviderRouteRouteWithChildren =
 interface SettingsRouteRouteChildren {
   SettingsProviderRouteRoute: typeof SettingsProviderRouteRouteWithChildren
   SettingsCommonRoute: typeof SettingsCommonRoute
+  SettingsRelayRoute: typeof SettingsRelayRoute
+  SettingsUsersRoute: typeof SettingsUsersRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
 }
 
 const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
   SettingsProviderRouteRoute: SettingsProviderRouteRouteWithChildren,
   SettingsCommonRoute: SettingsCommonRoute,
+  SettingsRelayRoute: SettingsRelayRoute,
+  SettingsUsersRoute: SettingsUsersRoute,
   SettingsIndexRoute: SettingsIndexRoute,
 }
 
@@ -182,6 +214,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/settings/common': typeof SettingsCommonRoute
+  '/settings/relay': typeof SettingsRelayRoute
+  '/settings/users': typeof SettingsUsersRoute
   '/chat': typeof ChatIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/settings/provider/$providerId': typeof SettingsProviderProviderIdRoute
@@ -194,6 +228,8 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRouteRouteWithChildren
   '/settings/provider': typeof SettingsProviderRouteRouteWithChildren
   '/settings/common': typeof SettingsCommonRoute
+  '/settings/relay': typeof SettingsRelayRoute
+  '/settings/users': typeof SettingsUsersRoute
   '/chat/': typeof ChatIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/settings/provider/$providerId': typeof SettingsProviderProviderIdRoute
@@ -207,6 +243,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/settings/provider'
     | '/settings/common'
+    | '/settings/relay'
+    | '/settings/users'
     | '/chat'
     | '/settings/'
     | '/settings/provider/$providerId'
@@ -215,6 +253,8 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/settings/common'
+    | '/settings/relay'
+    | '/settings/users'
     | '/chat'
     | '/settings'
     | '/settings/provider/$providerId'
@@ -225,6 +265,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/settings/provider'
     | '/settings/common'
+    | '/settings/relay'
+    | '/settings/users'
     | '/chat/'
     | '/settings/'
     | '/settings/provider/$providerId'
@@ -267,6 +309,8 @@ export const routeTree = rootRoute
       "children": [
         "/settings/provider",
         "/settings/common",
+        "/settings/relay",
+        "/settings/users",
         "/settings/"
       ]
     },

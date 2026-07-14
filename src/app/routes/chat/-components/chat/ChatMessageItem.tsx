@@ -26,6 +26,7 @@ interface ChatMessageItemProps {
 	onMessageUpdate?: (messageId: string, updates: Partial<ChatMessage>) => void;
 	onRetry?: (messageId: string) => Promise<void>; // Add retry callback
 	onDelete?: (messageId: string) => void; // Add delete callback
+	onUseAsReference?: (imageUrls: string[]) => void;
 }
 
 export function ChatMessageItem({
@@ -35,6 +36,7 @@ export function ChatMessageItem({
 	onMessageUpdate,
 	onRetry,
 	onDelete,
+	onUseAsReference,
 }: ChatMessageItemProps) {
 	const { t } = useTranslation();
 	const chatService = useChatService();
@@ -320,6 +322,7 @@ export function ChatMessageItem({
 									}
 									isUser={isUser}
 									onDelete={onDelete}
+									onUseAsReference={onUseAsReference}
 									className={cn(
 										"absolute top-1 z-10",
 										// Desktop positioning
@@ -401,6 +404,7 @@ export function ChatMessageItem({
 													imageUrls={currentMessageImageUrls}
 													isUser={isUser}
 													onDelete={onDelete}
+													onUseAsReference={onUseAsReference}
 													className={cn(
 														"absolute top-1 z-10",
 														// Desktop positioning
@@ -443,6 +447,7 @@ export function ChatMessageItem({
 												imageUrls={currentMessageImageUrls}
 												isUser={isUser}
 												onDelete={onDelete}
+												onUseAsReference={onUseAsReference}
 												className={cn(
 													"-top-2 absolute z-10",
 													// Desktop positioning

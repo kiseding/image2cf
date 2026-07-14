@@ -39,6 +39,7 @@ function ChatPageContent() {
 	// Local state for model selection when no chat is selected
 	const [selectedProvider, setSelectedProvider] = useState<string | undefined>();
 	const [selectedModel, setSelectedModel] = useState<string | undefined>();
+	const [referenceImageUrls, setReferenceImageUrls] = useState<string[]>([]);
 
 	// Get available providers for auto-selection
 	const { data: providers } = aiService.getEnabledAiProvidersWithModels.swr("ai-providers-with-models");
@@ -226,6 +227,7 @@ function ChatPageContent() {
 					onMessageUpdate={updateMessage}
 					onRetry={regenerateMessage}
 					onDeleteMessage={deleteMessage}
+					onUseAsReference={setReferenceImageUrls}
 					// Pass selected provider/model for when there's no current chat
 					fallbackProvider={selectedProvider}
 					fallbackModel={selectedModel}
@@ -236,6 +238,8 @@ function ChatPageContent() {
 					disabled={isGenerating}
 					currentProvider={currentChat?.provider || selectedProvider}
 					currentModel={currentChat?.model || selectedModel}
+					referenceImageUrls={referenceImageUrls}
+					onReferenceImagesChange={setReferenceImageUrls}
 				/>
 			</div>
 		</div>

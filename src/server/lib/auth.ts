@@ -1,12 +1,11 @@
 import { scryptSync } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { emailOTP } from "better-auth/plugins";
-import { sendEmail } from "./email";
+import { APIError } from "better-auth/api";
 
 export interface AuthConfig {
 	email: {
-		verification: boolean; // Enable email verification
+		verification: boolean;
 		resend: {
 			apiKey: string;
 			from: string;
@@ -24,8 +23,9 @@ export interface AuthConfig {
 			clientSecret: string;
 		};
 	};
-	// Cookie domain for cross-subdomain sharing (e.g., .xxx.com)
 	cookieDomain?: string;
+	// Disable public registration (admin creates users)
+	disableSignUp?: boolean;
 }
 
 export const createAuth = (db: any, config?: AuthConfig) =>
@@ -33,6 +33,24 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 		database: drizzleAdapter(db, {
 			provider: "sqlite",
 		}),
+		user: {
+			additionalFields: {
+				role: {
+					type: "string" as const,
+					required: false,
+					defaultValue: "user",
+					input: false,
+					returned: true,
+				},
+				banned: {
+					type: "boolean" as const,
+					required: false,
+					defaultValue: false,
+					input: false,
+					returned: true,
+				},
+			},
+		},
 		...(config?.cookieDomain
 			? {
 					advanced: {
@@ -45,8 +63,8 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 			: {}),
 		emailAndPassword: {
 			enabled: true,
+			disableSignUp: config?.disableSignUp !== false,
 			requireEmailVerification: config?.email?.verification === true,
-			// Custom password hashing function to avoid cloudflare workers cpu limitations, see: https://github.com/better-auth/better-auth/issues/969
 			password: {
 				hash: async (password) => {
 					const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -83,31 +101,34 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 				},
 			},
 		},
-		/* 	emailVerification: {
-			sendVerificationEmail: async ({ user, url, token }, request) => {
-				console.log(`Sending verification email to ${user.email}`, url);
-				await sendEmail(user.email, url);
-			},
-		}, */
 		emailVerification: {
 			autoSignInAfterVerification: true,
 		},
-		plugins: [
-			emailOTP({
-				overrideDefaultEmailVerification: true,
-				async sendVerificationOTP({ email, otp, type }) {
-					// Implement the sendVerificationOTP method to send the OTP to the user's email address
-					console.log(`Sending ${type} OTP to ${email}: ${otp} ${type}`);
-					await sendEmail(email, otp);
+		databaseHooks: {
+			session: {
+				create: {
+					before: async (session) => {
+						const found = await db.query.user.findFirst({
+							where: (u: any, { eq }: any) => eq(u.id, session.userId),
+						});
+						if (found?.banned) {
+							throw new APIError("FORBIDDEN", {
+								message: "User is banned",
+							});
+						}
+						return { data: session };
+					},
 				},
-			}),
-		],
+			},
+		},
+		plugins: [],
 		socialProviders: {
 			google:
 				config?.social.google.enabled === true
 					? {
 							clientId: config.social.google.clientId,
 							clientSecret: config.social.google.clientSecret,
+							disableSignUp: true,
 						}
 					: undefined,
 			github:
@@ -115,6 +136,7 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 					? {
 							clientId: config.social.github.clientId,
 							clientSecret: config.social.github.clientSecret,
+							disableSignUp: true,
 						}
 					: undefined,
 		},
