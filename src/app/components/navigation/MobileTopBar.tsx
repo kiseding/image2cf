@@ -29,9 +29,11 @@ export function MobileTopBar({ title, onBack }: MobileTopBarProps) {
 				// Navigate to parent path: /a/b -> /a
 				const parentPath = `/${pathSegments.slice(0, -1).join("/")}`;
 				navigate({ to: parentPath, search: {} });
+			} else if (currentPath.startsWith("/settings")) {
+				// Settings root → chat (mobile bottom bar removed)
+				navigate({ to: "/chat", search: {} });
 			} else {
-				// Navigate to root: /a -> /
-				navigate({ to: "/", search: {} });
+				navigate({ to: "/chat", search: {} });
 			}
 		}
 	};

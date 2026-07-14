@@ -1,76 +1,85 @@
+import { Input } from "@/app/components/ui/input";
+import { Label } from "@/app/components/ui/label";
 import { Slider } from "@/app/components/ui/slider";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/app/components/ui/tooltip";
-import { cn } from "@/app/lib/utils";
 import { getModelById } from "@/server/ai/provider";
-import type { AspectRatio } from "@/server/ai/types/api";
-import { RectangleHorizontal, RectangleVertical, Square } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
+export type ImageSizePrefs = {
+	width?: number;
+	height?: number;
+};
+
 interface ImagePreferencesProps {
 	imageCount: number;
-	aspectRatio?: AspectRatio;
+	width?: number;
+	height?: number;
 	onImageCountChange: (count: number) => void;
-	onAspectRatioChange: (ratio: AspectRatio | undefined) => void;
+	onSizeChange: (size: ImageSizePrefs) => void;
 	currentProvider?: string;
 	currentModel?: string;
+	/** Default size from relay model config */
+	defaultWidth?: number;
+	defaultHeight?: number;
 	onClose: () => void;
 }
 
-// Aspect ratio icon mapping
-const AspectRatioIcons = {
-	"1:1": Square,
-	"16:9": RectangleHorizontal,
-	"9:16": RectangleVertical,
-	"4:3": RectangleHorizontal,
-	"3:4": RectangleVertical,
-};
-
 export function ImagePreferences({
 	imageCount,
-	aspectRatio,
+	width,
+	height,
 	onImageCountChange,
-	onAspectRatioChange,
+	onSizeChange,
 	currentProvider,
 	currentModel,
+	defaultWidth,
+	defaultHeight,
 	onClose,
 }: ImagePreferencesProps) {
 	const { t } = useTranslation();
 	const panelRef = useRef<HTMLDivElement>(null);
 
-	// Get supported aspect ratios from current model
-	const supportedAspectRatios = (() => {
-		if (!currentProvider || !currentModel) return [];
-
+	const modelDefaults = (() => {
+		if (!currentProvider || !currentModel) return { w: defaultWidth || 1024, h: defaultHeight || 1024 };
 		try {
-			const model = getModelById(currentProvider, currentModel);
-			return model.supportedAspectRatios || [];
+			const model = getModelById(currentProvider, currentModel) as any;
+			return {
+				w: model.defaultWidth || defaultWidth || 1024,
+				h: model.defaultHeight || defaultHeight || 1024,
+			};
 		} catch {
-			return [];
+			return { w: defaultWidth || 1024, h: defaultHeight || 1024 };
 		}
 	})();
 
-	// Handle click outside to close panel
+	const w = width ?? modelDefaults.w;
+	const h = height ?? modelDefaults.h;
+
 	useEffect(() => {
 		const handleClickOutside = (event: MouseEvent) => {
 			if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
 				onClose();
 			}
 		};
-
 		document.addEventListener("mousedown", handleClickOutside);
-		return () => {
-			document.removeEventListener("mousedown", handleClickOutside);
-		};
+		return () => document.removeEventListener("mousedown", handleClickOutside);
 	}, [onClose]);
+
+	const setW = (v: number) => {
+		const n = Math.min(4096, Math.max(64, Math.round(v) || 1024));
+		onSizeChange({ width: n, height: h });
+	};
+	const setH = (v: number) => {
+		const n = Math.min(4096, Math.max(64, Math.round(v) || 1024));
+		onSizeChange({ width: w, height: n });
+	};
 
 	return (
 		<div
 			ref={panelRef}
-			className="w-64 rounded-lg border border-border/50 bg-background/95 p-3 shadow-lg backdrop-blur-md"
+			className="w-72 rounded-lg border border-border/50 bg-background/95 p-3 shadow-lg backdrop-blur-md"
 		>
 			<div className="space-y-4">
-				{/* Image Count Slider */}
 				<div className="space-y-2">
 					<div className="flex items-center justify-between">
 						<span className="text-muted-foreground text-sm">{t("chat.imageCount")}</span>
@@ -84,73 +93,56 @@ export function ImagePreferences({
 						step={1}
 						className="w-full"
 					/>
-					<div className="flex justify-between text-muted-foreground text-xs">
-						<span>1</span>
-						<span>4</span>
-					</div>
 				</div>
 
-				{/* Aspect Ratio Selection */}
-				{supportedAspectRatios.length > 0 && (
-					<div className="space-y-2">
-						<span className="text-muted-foreground text-sm">{t("chat.aspectRatio")}</span>
-						<div className="grid grid-cols-3 gap-2">
-							{/* Auto/None option */}
-							<TooltipProvider>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											onClick={() => onAspectRatioChange(undefined)}
-											className={cn(
-												"h-8 w-full rounded-md border-0 text-xs outline-none transition-all duration-200 focus:outline-none",
-												aspectRatio === undefined
-													? "scale-105 bg-primary text-primary-foreground shadow-md shadow-primary/25"
-													: "bg-muted/50 text-muted-foreground hover:scale-105 hover:bg-muted hover:text-foreground",
-											)}
-										>
-											{t("chat.auto")}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent>
-										<p>{t("chat.autoAspectRatio")}</p>
-									</TooltipContent>
-								</Tooltip>
-							</TooltipProvider>
-
-							{/* Supported aspect ratios */}
-							{supportedAspectRatios.map((ratio) => {
-								const IconComponent = AspectRatioIcons[ratio];
-								const isSelected = aspectRatio === ratio;
-								return (
-									<TooltipProvider key={ratio}>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<button
-													type="button"
-													onClick={() => onAspectRatioChange(ratio)}
-													className={cn(
-														"flex h-8 w-full items-center justify-center rounded-md border-0 outline-none transition-all duration-200 focus:outline-none",
-														isSelected
-															? "scale-105 bg-primary text-primary-foreground shadow-md shadow-primary/25"
-															: "bg-muted/50 text-muted-foreground hover:scale-105 hover:bg-muted hover:text-foreground",
-													)}
-												>
-													<IconComponent
-														className={cn("h-3.5 w-3.5 transition-all duration-200", isSelected && "drop-shadow-sm")}
-													/>
-												</button>
-											</TooltipTrigger>
-											<TooltipContent>
-												<p>{ratio}</p>
-											</TooltipContent>
-										</Tooltip>
-									</TooltipProvider>
-								);
-							})}
+				<div className="space-y-2">
+					<span className="text-muted-foreground text-sm">{t("chat.imageSize")}</span>
+					<div className="grid grid-cols-2 gap-2">
+						<div className="space-y-1">
+							<Label className="text-xs">{t("chat.width")}</Label>
+							<Input
+								type="number"
+								min={64}
+								max={4096}
+								step={64}
+								value={w}
+								onChange={(e) => setW(Number(e.target.value))}
+								className="h-8 font-mono text-xs"
+							/>
+						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">{t("chat.height")}</Label>
+							<Input
+								type="number"
+								min={64}
+								max={4096}
+								step={64}
+								value={h}
+								onChange={(e) => setH(Number(e.target.value))}
+								className="h-8 font-mono text-xs"
+							/>
 						</div>
 					</div>
-				)}
+					<div className="flex flex-wrap gap-1">
+						{[
+							[1024, 1024],
+							[1280, 720],
+							[720, 1280],
+							[1536, 1024],
+							[1024, 1536],
+						].map(([pw, ph]) => (
+							<button
+								key={`${pw}x${ph}`}
+								type="button"
+								className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] hover:bg-muted"
+								onClick={() => onSizeChange({ width: pw, height: ph })}
+							>
+								{pw}×{ph}
+							</button>
+						))}
+					</div>
+					<p className="text-[10px] text-muted-foreground">{t("chat.imageSizeHint")}</p>
+				</div>
 			</div>
 		</div>
 	);

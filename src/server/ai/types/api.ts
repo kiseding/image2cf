@@ -19,7 +19,9 @@ export const TypixGenerateRequestSchema = z.object({
 	prompt: z.string(),
 	images: z.array(z.string()).optional(), // Optional images for image generation, Data URI (base64)
 	n: z.number().int().min(1).default(1).optional(),
-	aspectRatio: z.enum(aspectRatios).optional(), // Optional aspect ratio
+	aspectRatio: z.enum(aspectRatios).optional(), // Optional aspect ratio (legacy)
+	width: z.number().int().min(64).max(4096).optional(),
+	height: z.number().int().min(64).max(4096).optional(),
 });
 
 export type TypixGenerateRequest = z.infer<typeof TypixGenerateRequestSchema>;

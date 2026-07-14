@@ -271,7 +271,8 @@ function AppContent() {
 	return (
 		<div className="flex h-app bg-gradient-to-br from-background via-background to-muted/20 md:h-screen">
 			<GlobalNavigation />
-			<div className="relative flex flex-1 flex-col overflow-hidden md:ml-16">
+			{/* No mobile bottom bar; only desktop left rail takes space */}
+			<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden md:ml-16">
 				<Outlet />
 			</div>
 			<LoginModal />

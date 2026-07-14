@@ -26,7 +26,12 @@ export const CreateChatSchema = createInsertSchema(chats)
 		 */
 		imageCount: z.number().int().min(1).max(10).default(1),
 		/**
-		 * Aspect ratio for image generation
+		 * Pixel size (preferred)
+		 */
+		width: z.number().int().min(64).max(4096).optional(),
+		height: z.number().int().min(64).max(4096).optional(),
+		/**
+		 * Aspect ratio for image generation (legacy)
 		 */
 		aspectRatio: z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]).optional(),
 		/**
@@ -69,8 +74,10 @@ const createChat = async (req: CreateChat, ctx: RequestContext) => {
 				type: "text",
 				provider: req.provider,
 				model: req.model,
-				imageCount: req.imageCount, // Pass the image count
-				aspectRatio: req.aspectRatio, // Pass the aspect ratio
+				imageCount: req.imageCount,
+				width: req.width,
+				height: req.height,
+				aspectRatio: req.aspectRatio,
 				attachments: req.attachments,
 				images: req.images,
 			},
@@ -291,7 +298,12 @@ export const CreateMessageSchema = createInsertSchema(messages)
 		 */
 		imageCount: z.number().int().min(1).max(10).default(1),
 		/**
-		 * Aspect ratio for image generation
+		 * Pixel size (preferred)
+		 */
+		width: z.number().int().min(64).max(4096).optional(),
+		height: z.number().int().min(64).max(4096).optional(),
+		/**
+		 * Aspect ratio for image generation (legacy)
 		 */
 		aspectRatio: z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"]).optional(),
 		/**
@@ -323,8 +335,10 @@ interface GenerationParams {
 	chatId: string;
 	userId: string;
 	userImages?: string[];
-	imageCount?: number; // Number of images to generate
-	aspectRatio?: string; // Aspect ratio for image generation
+	imageCount?: number;
+	width?: number;
+	height?: number;
+	aspectRatio?: string;
 	messageId?: string; // For regeneration, exclude this message from reference search
 }
 
@@ -339,6 +353,8 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		userId,
 		userImages,
 		imageCount,
+		width,
+		height,
 		aspectRatio,
 		messageId,
 	} = params;
@@ -414,6 +430,8 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			images: referImages,
 			n: imageCount || 1,
 			aspectRatio: aspectRatio as any,
+			width,
+			height,
 		};
 
 		let result;
@@ -552,6 +570,8 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 			status: "pending",
 			parameters: {
 				imageCount: req.imageCount,
+				width: req.width,
+				height: req.height,
 				aspectRatio: req.aspectRatio,
 			} as any,
 		})
@@ -695,6 +715,8 @@ const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestCon
 	// Extract parameters from generation record
 	const params = generation.parameters as any;
 	const imageCount = params?.imageCount || 1;
+	const width = params?.width;
+	const height = params?.height;
 	const aspectRatio = params?.aspectRatio;
 
 	// Execute image generation
@@ -708,6 +730,8 @@ const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestCon
 			userId,
 			userImages: userImages?.filter(Boolean) as string[] | undefined,
 			imageCount,
+			width,
+			height,
 			aspectRatio,
 			messageId: message.id,
 		},

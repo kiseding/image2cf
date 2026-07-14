@@ -5,14 +5,18 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/app/
 import { useToast } from "@/app/hooks/useToast";
 import { cn } from "@/app/lib/utils";
 import { getModelById } from "@/server/ai/provider";
-import type { AspectRatio } from "@/server/ai/types/api";
 import { Image, Send, SlidersHorizontal, X, ZoomIn } from "lucide-react";
 import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ImagePreferences } from "./ImagePreferences";
 
 interface ChatInputProps {
-	onSendMessage: (content: string, imageFiles?: File[], imageCount?: number, aspectRatio?: AspectRatio) => void;
+	onSendMessage: (
+		content: string,
+		imageFiles?: File[],
+		imageCount?: number,
+		size?: { width?: number; height?: number },
+	) => void;
 	disabled?: boolean;
 	currentProvider?: string;
 	currentModel?: string;
@@ -46,7 +50,8 @@ export function ChatInput({
 	const [lightboxIndex, setLightboxIndex] = useState(0);
 	const [shouldFocusAfterEnable, setShouldFocusAfterEnable] = useState(false);
 	const [imageCount, setImageCount] = useState(1);
-	const [aspectRatio, setAspectRatio] = useState<AspectRatio | undefined>(undefined);
+	const [width, setWidth] = useState<number | undefined>(undefined);
+	const [height, setHeight] = useState<number | undefined>(undefined);
 	const [showPreferences, setShowPreferences] = useState(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -169,7 +174,7 @@ export function ChatInput({
 		// Mark that we should focus after the input is re-enabled
 		setShouldFocusAfterEnable(true);
 
-		onSendMessage(message.trim(), selectedImages.length > 0 ? selectedImages : undefined, imageCount, aspectRatio);
+		onSendMessage(message.trim(), selectedImages.length > 0 ? selectedImages : undefined, imageCount, { width, height });
 		setMessage("");
 		setSelectedImages([]);
 		setPreviewUrls([]);
@@ -374,9 +379,13 @@ export function ChatInput({
 									<div className="absolute bottom-12 left-0 z-50">
 										<ImagePreferences
 											imageCount={imageCount}
-											aspectRatio={aspectRatio}
+											width={width}
+											height={height}
 											onImageCountChange={setImageCount}
-											onAspectRatioChange={setAspectRatio}
+											onSizeChange={({ width: w, height: h }) => {
+												setWidth(w);
+												setHeight(h);
+											}}
 											currentProvider={currentProvider}
 											currentModel={currentModel}
 											onClose={() => setShowPreferences(false)}

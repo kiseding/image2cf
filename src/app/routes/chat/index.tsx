@@ -7,7 +7,6 @@ import { ChatInput } from "@/app/routes/chat/-components/chat/ChatInput";
 import { ChatSidebar } from "@/app/routes/chat/-components/sidebar/ChatSidebar";
 import { useChat } from "@/app/routes/chat/-hooks/useChat";
 import { ChatSidebarProvider, useSidebar } from "@/app/routes/chat/-hooks/useChatSidebar";
-import type { AspectRatio } from "@/server/ai/types/api";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -151,11 +150,10 @@ function ChatPageContent() {
 		content: string,
 		imageFiles?: File[],
 		imageCount?: number,
-		aspectRatio?: AspectRatio,
+		size?: { width?: number; height?: number },
 	) => {
 		try {
-			// Execute sendMessage and wait for completion
-			await sendMessage(content, imageFiles, undefined, imageCount, aspectRatio);
+			await sendMessage(content, imageFiles, undefined, imageCount, size);
 		} catch (error) {
 			console.error("Error sending message:", error);
 
@@ -209,9 +207,10 @@ function ChatPageContent() {
 					// Desktop: Margin calculation based on sidebar slide state
 					// When expanded: GlobalNavigation (16px) + ChatSidebar (320px) = 336px
 					// When collapsed: Only GlobalNavigation (16px), sidebar is completely hidden
-					!isMobile && isOpen && "md:ml-96", // 16 + 320 = 336px, use ml-96 for 24rem
-					!isMobile && !isOpen && "md:ml-16", // Only GlobalNavigation width: 16px = 4rem
-					// Mobile: No margin, sidebar is overlay
+					// Desktop: GlobalNavigation 16 + optional ChatSidebar 320
+					!isMobile && isOpen && "md:ml-96",
+					!isMobile && !isOpen && "md:ml-16",
+					// Mobile: no bottom bar, sidebar is overlay
 					isMobile && "ml-0",
 				)}
 			>

@@ -8,12 +8,13 @@ import {
 	DropdownMenuTrigger,
 } from "@/app/components/ui/dropdown-menu";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
-import { Sheet, SheetContent } from "@/app/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/app/components/ui/sheet";
 import { useAuth } from "@/app/hooks/useAuth";
 import { cn } from "@/app/lib/utils";
 import { mode } from "@/server/lib/env";
 import type { chatService } from "@/server/service/chat";
-import { MoreVertical, Palette, Plus, Trash2 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { MoreVertical, Palette, Plus, Settings, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSidebar } from "../../-hooks/useChatSidebar";
@@ -47,6 +48,7 @@ export function ChatSidebar({
 	onDeleteChat,
 }: ChatSidebarProps) {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
 	const { isOpen, toggle, setOpen, isMobile } = useSidebar();
 	const { isLogin: isAuthenticated } = useAuth();
 
@@ -197,26 +199,32 @@ export function ChatSidebar({
 					</ScrollArea>
 				</div>
 			</div>
-			{/* BOTTOM SECTION - Fixed height at bottom (User Profile or Login) */}
-			{mode !== "client" && (
-				<div className="mt-auto flex-shrink-0">
-					<div className="p-4">
-						{isAuthenticated ? (
-							/* Logged in user profile with UserMenu */
-							<UserMenu showLoginButton={false} className="w-full" />
-						) : (
-							/* Login prompt for non-authenticated users */
-							<div className="space-y-3">
-								<div className="text-center">
-									<p className="font-medium text-sm">{t("auth.welcomeMessage")}</p>
-									<p className="text-muted-foreground text-xs">{t("auth.loginToSave")}</p>
-								</div>
-								<LoginButton className="w-full" />
+			{/* BOTTOM SECTION */}
+			<div className="mt-auto flex-shrink-0 space-y-2 border-border/50 border-t p-4">
+				<Button
+					variant="outline"
+					className="w-full justify-start gap-3"
+					onClick={() => {
+						navigate({ to: "/settings", search: {} });
+						if (isMobile) setOpen(false);
+					}}
+				>
+					<Settings className="h-4 w-4" />
+					<span>{t("navigation.settings")}</span>
+				</Button>
+				{mode !== "client" &&
+					(isAuthenticated ? (
+						<UserMenu showLoginButton={false} className="w-full" />
+					) : (
+						<div className="space-y-3">
+							<div className="text-center">
+								<p className="font-medium text-sm">{t("auth.welcomeMessage")}</p>
+								<p className="text-muted-foreground text-xs">{t("auth.loginToSave")}</p>
 							</div>
-						)}
-					</div>
-				</div>
-			)}
+							<LoginButton className="w-full" />
+						</div>
+					))}
+			</div>
 		</div>
 	);
 	// Mobile: Use Sheet (drawer) - controlled by hooks
@@ -224,19 +232,20 @@ export function ChatSidebar({
 		return (
 			<Sheet open={isOpen} onOpenChange={setOpen}>
 				<SheetContent side="left" className="w-80 bg-background/95 p-0 backdrop-blur-lg [&>button]:z-50">
+					<SheetTitle className="sr-only">{t("chat.chatHistory")}</SheetTitle>
+					<SheetDescription className="sr-only">{t("chat.chatWith")}</SheetDescription>
 					<SidebarContent />
 				</SheetContent>
 			</Sheet>
 		);
-	} // Desktop: Slide-in/out animation - sidebar slides completely off screen when collapsed
+	}
+	// Desktop: offset by global rail (16) when present
 	return (
 		<>
-			{/* Sidebar container - slides in from left */}
 			<div
 				className={cn(
-					"fixed top-0 left-16 z-30 h-full transition-transform duration-300 ease-in-out",
-					"w-80 border-border/50 border-r",
-					// Transform based slide animation: slide out to left when collapsed
+					"fixed top-0 z-30 h-full w-80 border-border/50 border-r transition-transform duration-300 ease-in-out",
+					"left-0 md:left-16",
 					isOpen ? "translate-x-0" : "-translate-x-full",
 				)}
 			>

@@ -17,6 +17,8 @@ const RelayModelSchema = z.object({
 	// optional legacy field — routing no longer depends on it
 	ability: z.enum(["t2i", "i2i"]).optional(),
 	maxInputImages: z.number().int().min(1).max(16).default(4),
+	defaultWidth: z.number().int().min(64).max(4096).optional(),
+	defaultHeight: z.number().int().min(64).max(4096).optional(),
 	supportedAspectRatios: z.array(z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"])).optional(),
 });
 
@@ -336,6 +338,8 @@ const getEnabledRelaysAsProviders = async (ctx: RequestContext) => {
 			// ability always i2i so UI allows reference images; actual route is by has-images
 			ability: "i2i" as const,
 			maxInputImages: m.maxInputImages || 4,
+			defaultWidth: m.defaultWidth,
+			defaultHeight: m.defaultHeight,
 			enabledByDefault: true,
 			enabled: true,
 			supportedAspectRatios: m.supportedAspectRatios,

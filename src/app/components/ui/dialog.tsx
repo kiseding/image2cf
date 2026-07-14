@@ -62,6 +62,8 @@ function DialogContent({
           className
         )}
         {...props}
+        // Silence Radix a11y warning when no DialogDescription is provided
+        aria-describedby={props["aria-describedby"] ?? undefined}
       >
         {children}
         {!hideClose && (

@@ -71,32 +71,93 @@ const sizeMap: Record<string, string> = {
 	"3:4": "1024x1536",
 };
 
+function normalizeBase64Image(raw: string): string {
+	const s = String(raw || "").trim();
+	if (!s) return "";
+	if (s.startsWith("data:image")) return s;
+	if (s.startsWith("data:")) return s;
+	// strip whitespace/newlines from raw base64
+	const b64 = s.replace(/\s+/g, "");
+	// detect mime from prefix if present
+	if (b64.startsWith("/9j/")) return base64ToDataURI(b64, "jpeg");
+	if (b64.startsWith("iVBOR")) return base64ToDataURI(b64, "png");
+	if (b64.startsWith("R0lGOD")) return base64ToDataURI(b64, "gif");
+	if (b64.startsWith("UklGR")) return base64ToDataURI(b64, "webp");
+	return base64ToDataURI(b64, "png");
+}
+
 async function parseImageResponse(json: any): Promise<string[]> {
 	const out: string[] = [];
-	const data = Array.isArray(json?.data) ? json.data : [];
-	for (const image of data) {
-		if (image?.b64_json) {
-			out.push(base64ToDataURI(String(image.b64_json)));
-		} else if (image?.url) {
-			try {
-				out.push(await fetchUrlToDataURI(String(image.url)));
-			} catch {
-				/* skip */
+	const push = async (v: any) => {
+		if (!v) return;
+		if (typeof v === "string") {
+			if (v.startsWith("http://") || v.startsWith("https://")) {
+				try {
+					out.push(await fetchUrlToDataURI(v));
+				} catch {
+					/* skip */
+				}
+			} else {
+				const n = normalizeBase64Image(v);
+				if (n) out.push(n);
+			}
+			return;
+		}
+		if (typeof v === "object") {
+			const candidates = [v.b64_json, v.b64, v.base64, v.image_base64, v.imageBase64, v.result];
+			// only treat .data as base64 when it is a long string (not nested array/object)
+			if (typeof v.data === "string") candidates.push(v.data);
+			const url = v.url || v.image_url || v.imageUrl;
+			let found = false;
+			for (const b64 of candidates) {
+				if (typeof b64 === "string" && b64.length > 32 && !b64.startsWith("http")) {
+					const n = normalizeBase64Image(b64);
+					if (n) {
+						out.push(n);
+						found = true;
+						break;
+					}
+				}
+			}
+			if (!found && typeof url === "string") await push(url);
+			if (!found && Array.isArray(v.data)) {
+				for (const item of v.data) await push(item);
 			}
 		}
+	};
+
+	// OpenAI style
+	if (Array.isArray(json?.data)) {
+		for (const image of json.data) await push(image);
 	}
-	// Some relays nest under result/images
+	// nested images / results
 	if (!out.length && Array.isArray(json?.images)) {
-		for (const item of json.images) {
-			if (typeof item === "string") {
-				if (item.startsWith("data:")) out.push(item);
-				else if (item.startsWith("http")) {
-					try {
-						out.push(await fetchUrlToDataURI(item));
-					} catch {
-						/* skip */
+		for (const item of json.images) await push(item);
+	}
+	if (!out.length && Array.isArray(json?.results)) {
+		for (const item of json.results) await push(item);
+	}
+	// single fields
+	if (!out.length) {
+		await push(json?.image);
+		await push(json?.b64_json);
+		await push(json?.base64);
+		await push(json?.output);
+	}
+	// output array (responses-like)
+	if (!out.length && Array.isArray(json?.output)) {
+		for (const item of json.output) {
+			if (item?.type === "image_generation_call" && item.result) await push(item.result);
+			if (Array.isArray(item?.content)) {
+				for (const part of item.content) {
+					if (part?.type === "output_image" || part?.type === "image") {
+						await push(part.b64_json || part.image_url || part.url || part.result);
 					}
-				} else out.push(base64ToDataURI(item));
+					if (part?.type === "output_text" && typeof part.text === "string") {
+						const m = part.text.match(/data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=\s]+/);
+						if (m?.[0]) await push(m[0].replace(/\s+/g, ""));
+					}
+				}
 			}
 		}
 	}
@@ -130,7 +191,15 @@ export async function generateViaEndpointPaths(params: {
 	const url = joinUrl(baseURL, path);
 	const model = params.model;
 	const n = params.request.n || 1;
-	const size = params.request.aspectRatio ? sizeMap[params.request.aspectRatio] : undefined;
+	// Prefer explicit pixel size from UI; fall back to aspect ratio map
+	const size =
+		params.request.width && params.request.height
+			? `${params.request.width}x${params.request.height}`
+			: params.request.aspectRatio
+				? sizeMap[params.request.aspectRatio]
+				: undefined;
+	const width = params.request.width;
+	const height = params.request.height;
 
 	try {
 		let resp: Response;
@@ -147,6 +216,8 @@ export async function generateViaEndpointPaths(params: {
 					prompt: params.request.prompt,
 					n,
 					...(size ? { size } : {}),
+					...(width ? { width } : {}),
+					...(height ? { height } : {}),
 					// many relays accept response_format
 					response_format: "b64_json",
 				}),
@@ -158,6 +229,8 @@ export async function generateViaEndpointPaths(params: {
 			form.append("prompt", params.request.prompt || "");
 			form.append("n", String(n));
 			if (size) form.append("size", size);
+			if (width) form.append("width", String(width));
+			if (height) form.append("height", String(height));
 			form.append("response_format", "b64_json");
 
 			const images = params.request.images || [];

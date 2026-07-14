@@ -1,6 +1,13 @@
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/app/components/ui/dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/app/components/ui/dialog";
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/app/components/ui/select";
@@ -28,6 +35,8 @@ type RelayModelForm = {
 	id: string;
 	name: string;
 	maxInputImages: number;
+	defaultWidth?: number;
+	defaultHeight?: number;
 };
 
 type EndpointsForm = {
@@ -61,7 +70,7 @@ const emptyForm: RelayForm = {
 	apiMode: "endpoints",
 	endpoints: { ...defaultEndpoints },
 	enabled: true,
-	models: [{ id: "", name: "", maxInputImages: 4 }],
+	models: [{ id: "", name: "", maxInputImages: 4, defaultWidth: 1024, defaultHeight: 1024 }],
 };
 
 function RelaySettingsPage() {
@@ -109,11 +118,15 @@ function RelaySettingsPage() {
 					id: m.id,
 					name: m.name,
 					maxInputImages: m.maxInputImages || 4,
+					defaultWidth: m.defaultWidth || 1024,
+					defaultHeight: m.defaultHeight || 1024,
 				})).length
 					? ((detail.models as any[]) || []).map((m) => ({
 							id: m.id,
 							name: m.name,
 							maxInputImages: m.maxInputImages || 4,
+							defaultWidth: m.defaultWidth || 1024,
+							defaultHeight: m.defaultHeight || 1024,
 						}))
 					: emptyForm.models,
 			});
@@ -156,6 +169,8 @@ function RelaySettingsPage() {
 					id: m.id,
 					name: m.name,
 					maxInputImages: m.maxInputImages,
+					defaultWidth: m.defaultWidth,
+					defaultHeight: m.defaultHeight,
 				})),
 			};
 			if (editingId) {
@@ -212,6 +227,8 @@ function RelaySettingsPage() {
 				id: m.id,
 				name: m.name || m.id,
 				maxInputImages: m.maxInputImages || 4,
+				defaultWidth: m.defaultWidth || 1024,
+				defaultHeight: m.defaultHeight || 1024,
 			});
 		}
 		const next = Array.from(existing.values());
@@ -306,7 +323,7 @@ function RelaySettingsPage() {
 			const id = idPart || "";
 			if (!id || seen.has(id)) continue;
 			seen.add(id);
-			next.push({ id, name: namePart || id, maxInputImages: 4 });
+			next.push({ id, name: namePart || id, maxInputImages: 4, defaultWidth: 1024, defaultHeight: 1024 });
 		}
 		if (!next.length) return;
 		mergeModelsIntoForm(next);
@@ -408,6 +425,9 @@ function RelaySettingsPage() {
 				<DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
 					<DialogHeader>
 						<DialogTitle>{editingId ? t("settings.relay.edit") : t("settings.relay.add")}</DialogTitle>
+						<DialogDescription className="sr-only">
+							{editingId ? t("settings.relay.edit") : t("settings.relay.add")}
+						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-4">
 						<div className="space-y-2">
@@ -569,7 +589,7 @@ function RelaySettingsPage() {
 									onClick={() =>
 										setForm((p) => ({
 											...p,
-											models: [...p.models, { id: "", name: "", maxInputImages: 4 }],
+											models: [...p.models, { id: "", name: "", maxInputImages: 4, defaultWidth: 1024, defaultHeight: 1024 }],
 										}))
 									}
 								>
@@ -622,17 +642,43 @@ function RelaySettingsPage() {
 												/>
 											</div>
 										</div>
-										<div className="space-y-1">
-											<Label className="text-xs">{t("settings.relay.maxImages")}</Label>
-											<Input
-												type="number"
-												min={1}
-												max={16}
-												value={model.maxInputImages}
-												onChange={(e) =>
-													updateModel(index, { maxInputImages: Number(e.target.value) || 4 })
-												}
-											/>
+										<div className="grid grid-cols-3 gap-2">
+											<div className="space-y-1">
+												<Label className="text-xs">{t("settings.relay.maxImages")}</Label>
+												<Input
+													type="number"
+													min={1}
+													max={16}
+													value={model.maxInputImages}
+													onChange={(e) =>
+														updateModel(index, { maxInputImages: Number(e.target.value) || 4 })
+													}
+												/>
+											</div>
+											<div className="space-y-1">
+												<Label className="text-xs">W</Label>
+												<Input
+													type="number"
+													min={64}
+													max={4096}
+													value={model.defaultWidth || 1024}
+													onChange={(e) =>
+														updateModel(index, { defaultWidth: Number(e.target.value) || 1024 })
+													}
+												/>
+											</div>
+											<div className="space-y-1">
+												<Label className="text-xs">H</Label>
+												<Input
+													type="number"
+													min={64}
+													max={4096}
+													value={model.defaultHeight || 1024}
+													onChange={(e) =>
+														updateModel(index, { defaultHeight: Number(e.target.value) || 1024 })
+													}
+												/>
+											</div>
 										</div>
 										{form.models.length > 1 && (
 											<Button

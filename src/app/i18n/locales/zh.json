@@ -80,7 +80,11 @@
 			"retry": "重试"
 		},
 		"referenceAdded": "已添加参考图",
-		"referenceAddedDesc": "已添加 {{count}} 张过往图片作为图生图参考"
+		"referenceAddedDesc": "已添加 {{count}} 张过往图片作为图生图参考",
+		"imageSize": "图片尺寸",
+		"width": "宽",
+		"height": "高",
+		"imageSizeHint": "输入像素宽高；中转站会以 size/width/height 传递"
 	},
 	"navigation": {
 		"chat": "对话",

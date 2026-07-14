@@ -80,7 +80,11 @@
 			"retry": "Retry"
 		},
 		"referenceAdded": "Reference images added",
-		"referenceAddedDesc": "Added {{count}} previous image(s) for image-to-image"
+		"referenceAddedDesc": "Added {{count}} previous image(s) for image-to-image",
+		"imageSize": "Image size",
+		"width": "Width",
+		"height": "Height",
+		"imageSizeHint": "Pixel width/height; sent as size/width/height to relays"
 	},
 	"navigation": {
 		"chat": "Chat",
