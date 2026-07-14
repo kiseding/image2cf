@@ -15,12 +15,12 @@ import { Route as SettingsRouteImport } from './routes/settings/route'
 import { Route as IndexImport } from './routes/index'
 import { Route as SettingsIndexImport } from './routes/settings/index'
 import { Route as ChatIndexImport } from './routes/chat/index'
+import { Route as SettingsUsersImport } from './routes/settings/users'
+import { Route as SettingsRelayImport } from './routes/settings/relay'
 import { Route as SettingsCommonImport } from './routes/settings/common'
 import { Route as SettingsProviderRouteImport } from './routes/settings/provider/route'
 import { Route as SettingsProviderIndexImport } from './routes/settings/provider/index'
 import { Route as SettingsProviderProviderIdImport } from './routes/settings/provider/$providerId'
-import { Route as SettingsRelayImport } from './routes/settings/relay'
-import { Route as SettingsUsersImport } from './routes/settings/users'
 
 // Create/Update Routes
 
@@ -48,9 +48,9 @@ const ChatIndexRoute = ChatIndexImport.update({
   getParentRoute: () => rootRoute,
 } as any)
 
-const SettingsCommonRoute = SettingsCommonImport.update({
-  id: '/common',
-  path: '/common',
+const SettingsUsersRoute = SettingsUsersImport.update({
+  id: '/users',
+  path: '/users',
   getParentRoute: () => SettingsRouteRoute,
 } as any)
 
@@ -60,9 +60,9 @@ const SettingsRelayRoute = SettingsRelayImport.update({
   getParentRoute: () => SettingsRouteRoute,
 } as any)
 
-const SettingsUsersRoute = SettingsUsersImport.update({
-  id: '/users',
-  path: '/users',
+const SettingsCommonRoute = SettingsCommonImport.update({
+  id: '/common',
+  path: '/common',
   getParentRoute: () => SettingsRouteRoute,
 } as any)
 
@@ -205,6 +205,8 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRouteRouteWithChildren
   '/settings/provider': typeof SettingsProviderRouteRouteWithChildren
   '/settings/common': typeof SettingsCommonRoute
+  '/settings/relay': typeof SettingsRelayRoute
+  '/settings/users': typeof SettingsUsersRoute
   '/chat': typeof ChatIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/settings/provider/$providerId': typeof SettingsProviderProviderIdRoute
@@ -324,6 +326,14 @@ export const routeTree = rootRoute
     },
     "/settings/common": {
       "filePath": "settings/common.tsx",
+      "parent": "/settings"
+    },
+    "/settings/relay": {
+      "filePath": "settings/relay.tsx",
+      "parent": "/settings"
+    },
+    "/settings/users": {
+      "filePath": "settings/users.tsx",
       "parent": "/settings"
     },
     "/chat/": {

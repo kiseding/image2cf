@@ -1,6 +1,6 @@
 import type { ApiResult } from "@/server/api/util";
 import { ServiceException } from "@/server/lib/exception";
-import { adminService } from "@/server/service/admin";
+import type { adminService } from "@/server/service/admin";
 import { aiService } from "@/server/service/ai";
 import { chatService } from "@/server/service/chat";
 import { type RequestContext, localUserId } from "@/server/service/context";
@@ -213,9 +213,10 @@ export function useAiService() {
 	return useService(aiService, apiService);
 }
 
+// Admin is server-only (uses node:crypto) — never import the local implementation into the browser bundle
 export function useAdminService() {
 	const apiService = useMemo(() => createApiServiceProxy<typeof adminService>(apiClient.api.admin), []);
-	return useService(adminService, apiService);
+	return useMemo(() => createEnhancedService(apiService), [apiService]);
 }
 
 export function useRelayService() {
