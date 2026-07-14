@@ -36,6 +36,9 @@ export type Env = {
 		EMAIL: string;
 		RESEND_APIKEY: string;
 		PROVIDER_CLOUDFLARE_BUILTIN?: "true" | "false";
+		// Admin bootstrap (set as Worker Secret in Dashboard)
+		ADMIN_PASSWORD?: string;
+		ADMIN_NAME?: string;
 		AUTH_EMAIL_VERIFICATION_ENABLED?: "true" | "false";
 		AUTH_EMAIL_RESEND_API_KEY?: string;
 		AUTH_EMAIL_RESEND_FROM?: string;
@@ -45,6 +48,8 @@ export type Env = {
 		AUTH_SOCIAL_GITHUB_ENABLED?: "true" | "false";
 		AUTH_SOCIAL_GITHUB_CLIENT_ID?: string;
 		AUTH_SOCIAL_GITHUB_CLIENT_SECRET?: string;
+		COOKIE_DOMAIN?: string;
+		MODE?: string;
 	};
 	Variables: {
 		db: DrizzleDb;

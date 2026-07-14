@@ -1,4 +1,3 @@
-import { env } from "hono/adapter";
 import { createFactory } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
@@ -6,6 +5,7 @@ import { Resend } from "resend";
 import { createDb } from "../db";
 import { type AuthConfig, createAuth } from "../lib/auth";
 import { ServiceException } from "../lib/exception";
+import { readWorkerEnv } from "../lib/worker-env";
 import { bootstrapAdmin } from "../service/admin/bootstrap";
 import { initContext } from "../service/context";
 import adminRouter from "./routes/admin";
@@ -21,8 +21,8 @@ const factory = createFactory<Env>({
 	initApp: async (app) => {
 		app.use(async (c, next) => {
 			const db = await createDb(c.env.DB);
-			// env(c) are both compatible with Cloudflare Workers(wrangler.toml) and Node.js(.env)
-			const e = env(c);
+			// Direct property access — do not spread c.env (secrets are non-enumerable)
+			const e = readWorkerEnv(c.env as any);
 			const authConfig: AuthConfig = {
 				email: {
 					verification: e.AUTH_EMAIL_VERIFICATION_ENABLED === "true",
@@ -43,7 +43,7 @@ const factory = createFactory<Env>({
 						clientSecret: e.AUTH_SOCIAL_GITHUB_CLIENT_SECRET || "",
 					},
 				},
-				cookieDomain: e.COOKIE_DOMAIN ? String(e.COOKIE_DOMAIN) : undefined,
+				cookieDomain: e.COOKIE_DOMAIN || undefined,
 				disableSignUp: true,
 			};
 
@@ -58,11 +58,14 @@ const factory = createFactory<Env>({
 							from: authConfig.email.resend.from,
 						}
 					: undefined,
-				providerCloudflareBuiltin: c.env.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
+				providerCloudflareBuiltin: e.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
 			});
 
-			// Bootstrap admin from bindings (c.env) + adapter env
-			await bootstrapAdmin(db, { ...(e as any), ...(c.env as any) });
+			await bootstrapAdmin(db, {
+				ADMIN_PASSWORD: e.ADMIN_PASSWORD,
+				ADMIN_NAME: e.ADMIN_NAME,
+				DB: c.env.DB,
+			});
 			await next();
 		});
 	},

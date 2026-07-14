@@ -11,14 +11,15 @@ export function resetBootstrapFlag() {
 }
 
 function pickPassword(env: Record<string, any>): string | undefined {
-	const v = env.ADMIN_PASSWORD ?? env.admin_password;
+	// Direct property access — secrets may be non-enumerable (spread loses them)
+	const v = env.ADMIN_PASSWORD ?? env.admin_password ?? env.raw?.ADMIN_PASSWORD;
 	if (v === undefined || v === null) return undefined;
 	const s = String(v).trim();
 	return s.length ? s : undefined;
 }
 
 function getD1(env: Record<string, any>): D1Database | null {
-	const db = env.DB;
+	const db = env.DB ?? env.raw?.DB;
 	if (db && typeof db.prepare === "function") return db as D1Database;
 	return null;
 }
