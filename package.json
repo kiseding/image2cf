@@ -18,8 +18,9 @@
 		"db:migrate:worker": "wrangler d1 migrations apply --remote image2cf",
 		"db:push": "drizzle-kit push",
 		"db:studio": "drizzle-kit studio",
-		"deploy": "npm run db:migrate:worker && wrangler deploy",
-		"deploy:no-migrate": "wrangler deploy"
+		"deploy:prepare": "node scripts/inject-d1-id.mjs",
+		"deploy": "node scripts/inject-d1-id.mjs && npm run db:migrate:worker && wrangler deploy --keep-vars",
+		"deploy:no-migrate": "node scripts/inject-d1-id.mjs && wrangler deploy --keep-vars"
 	},
 	"dependencies": {
 		"@bprogress/core": "^1.3.4",

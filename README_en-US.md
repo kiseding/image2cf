@@ -1,8 +1,8 @@
 # image2cf
 
-Multi-user AI image generation platform with admin-managed users, custom relay stations, and image-to-image references. Deploy to Cloudflare Workers or Node.js.
+Multi-user AI image generation with admin-managed users, custom relay stations, and image-to-image references. Deploy to Cloudflare Workers or Node.js.
 
-Forked and extended from [typix-image](https://github.com/kiseding/typix-image).
+Based on [typix-image](https://github.com/kiseding/typix-image).
 
 <p align="center">
   <a href="README.md">简体中文</a> | English
@@ -15,156 +15,90 @@ Forked and extended from [typix-image](https://github.com/kiseding/typix-image).
 | Feature | Description |
 |---------|-------------|
 | **Multi-user** | No public signup; admin creates / bans / resets / deletes users |
-| **Relay stations** | Per-user OpenAI / Google-compatible proxies (Base URL + API Key + models) |
-| **Image references** | One-click reuse of past generations as i2i inputs |
-| **Providers** | Cloudflare Workers AI, OpenAI, Google, Flux, Fal, and more |
-| **Runtimes** | Cloudflare Workers (recommended) / Node.js self-host |
+| **Relay stations** | Per-user OpenAI / Google-compatible proxies |
+| **Image references** | Reuse past generations as i2i inputs |
+| **Providers** | Cloudflare Workers AI, OpenAI, Google, Flux, Fal, … |
+| **Runtimes** | Cloudflare Workers (recommended) / Node.js |
+
+Config and secrets come from **GitHub Secrets / Cloudflare Dashboard / env vars** — **do not commit real IDs into `wrangler.toml`**.
 
 ---
 
-## Stack
+## Deploy: Workers + GitHub Actions
 
-- **Frontend**: React + Vite + TanStack Router  
-- **Backend**: Hono + better-auth + Drizzle ORM  
-- **DB**: Cloudflare D1 (Workers) / SQLite (Node)  
-- **Mode**: `MODE=mixed` (login required, server-side storage)
+### 1. Create D1
 
----
+Dashboard → **D1** → create DB (e.g. `image2cf`) → copy **Database ID**. Keep it out of the repo.
 
-## Deploy: Cloudflare Workers + GitHub Actions
+### 2. API Token
 
-### Prerequisites
-
-- Cloudflare account  
-- This repo on GitHub  
-- Node.js 20+ (only if editing config locally)
-
-### 1. Create D1 database
-
-Cloudflare Dashboard → **Workers & Pages → D1** → create database (e.g. `image2cf`).
-
-Put the **Database ID** into `wrangler.toml`:
-
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "image2cf"
-database_id = "your-database-id"   # ← replace
-migrations_dir = "drizzle/migrations"
-```
-
-### 2. Create API Token
-
-**My Profile → API Tokens → Create Token**
-
-Suggested permissions:
-
-- Account → Cloudflare Workers → Edit  
-- Account → D1 → Edit  
-- Account → Account Settings → Read  
-
-Note your **API Token** and **Account ID**.
+Permissions: Workers Edit, D1 Edit, Account Settings Read. Note **Token** and **Account ID**.
 
 ### 3. GitHub Secrets
 
-Repo → **Settings → Secrets and variables → Actions**:
-
-| Name | Value |
-|------|--------|
-| `CLOUDFLARE_API_TOKEN` | API Token |
+| Secret | Description |
+|--------|-------------|
+| `CLOUDFLARE_API_TOKEN` | API token |
 | `CLOUDFLARE_ACCOUNT_ID` | Account ID |
+| `CLOUDFLARE_D1_DATABASE_ID` | D1 database UUID |
 
-### 4. Worker variables / secrets
+CI injects the D1 ID into a temporary `wrangler.toml` at runtime (never committed).
 
-After first deploy, set in **Workers → image2cf → Settings → Variables** (or `wrangler secret put`):
+### 4. Worker variables (Dashboard)
+
+After first deploy → **Workers → image2cf → Variables and Secrets**:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ADMIN_EMAIL` | ✅ | Bootstrap admin email (created only when user table is empty) |
+| `ADMIN_EMAIL` | ✅ | Bootstrap admin email |
 | `ADMIN_PASSWORD` | ✅ | Bootstrap admin password |
-| `ADMIN_NAME` | | Display name (default `Admin`) |
-| `PROVIDER_CLOUDFLARE_BUILTIN` | | Use built-in Workers AI (default `true` in `wrangler.toml`) |
+| `ADMIN_NAME` | | Display name |
 
-### 5. Trigger deploy
+Deploy uses `--keep-vars` so Dashboard vars/secrets are preserved.
 
-- **Auto**: push to `main`  
-- **Manual**: Actions → **Deploy Cloudflare Workers** → Run workflow  
+### 5. Trigger
 
-Pipeline: install → build → D1 migrate → `wrangler deploy`.
+- Push to `main`, or  
+- Actions → **Deploy Cloudflare Workers** → Run workflow  
 
-URL: `https://image2cf.<subdomain>.workers.dev`
-
-### Local deploy (optional)
+### Local deploy (env only)
 
 ```bash
-pnpm install
-# edit database_id in wrangler.toml
-pnpm build
-pnpm deploy
+export CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_D1_DATABASE_ID=...
+
+pnpm install && pnpm build && pnpm deploy
 ```
 
 ---
 
-## Local development (Node.js)
+## Local development (Node)
 
 ```bash
-git clone https://github.com/kiseding/image2cf.git
-cd image2cf
-pnpm install
 cp .env.node.example .env
+# set DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD, MODE=mixed
+pnpm db:push && pnpm dev
 ```
-
-`.env` minimum:
-
-```env
-DATABASE_URL="file:./db.sqlite"
-ADMIN_EMAIL="admin@example.com"
-ADMIN_PASSWORD="change-me"
-MODE="mixed"
-```
-
-```bash
-pnpm db:push
-pnpm dev
-```
-
----
-
-## Environment variables
-
-| Variable | Runtime | Description |
-|----------|---------|-------------|
-| `MODE` | all | Use `mixed` |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | all | Bootstrap admin |
-| `PROVIDER_CLOUDFLARE_BUILTIN` | Workers | Built-in Workers AI |
-| `DATABASE_URL` | Node | e.g. `file:./db.sqlite` |
-| `FILE_STORAGE` | Node | `base64` / `disk` / `r2` |
-| `CLOUDFLARE_API_TOKEN` | Actions | Deploy token (secret) |
-| `CLOUDFLARE_ACCOUNT_ID` | Actions | Account ID (secret) |
 
 ---
 
 ## Usage
 
-1. **Login** with bootstrap admin credentials  
-2. **Settings → Users** — create accounts (no public registration)  
-3. **Settings → Relay stations** — add Base URL, API key, models  
-4. **Settings → AI providers** — configure built-in providers (optional)  
-5. **Chat** — generate images; hover a message → **Use as reference** for i2i  
+1. Login with bootstrap admin  
+2. **Settings → Users** — create accounts  
+3. **Settings → Relay stations** — Base URL / API key / models  
+4. **Settings → AI providers** — optional system providers  
+5. Chat → **Use as reference** for image-to-image  
 
 ---
 
 ## Scripts
 
 ```bash
-pnpm dev                 # local Vite + server
-pnpm dev:worker          # wrangler local
-pnpm build               # Cloudflare build
-pnpm build:node          # Node build
-pnpm db:push             # push schema (local SQLite)
-pnpm db:migrate:worker   # remote D1 migrations
-pnpm deploy              # migrate + deploy Workers
-pnpm deploy:no-migrate   # deploy only (CI)
+pnpm deploy              # inject D1 ID + migrate + deploy --keep-vars
+pnpm deploy:no-migrate   # inject D1 ID + deploy only
+pnpm build / pnpm dev / pnpm db:push
 ```
 
 ---
@@ -173,18 +107,17 @@ pnpm deploy:no-migrate   # deploy only (CI)
 
 | Issue | Fix |
 |-------|-----|
-| Actions auth failure | Check `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` |
-| D1 migrate fails | Verify `database_id` and token D1 permissions |
-| No admin login | Ensure `ADMIN_*` set and DB was empty on first boot |
-| Relay generate fails | Verify Base URL, API key, model IDs |
-| i2i disabled | Switch to a model with I2I ability |
+| Missing `CLOUDFLARE_D1_DATABASE_ID` | Add the secret |
+| Auth / migrate failures | Check token, account ID, D1 ID |
+| Dashboard vars wiped | Ensure deploy uses `--keep-vars` |
+| No admin | Set `ADMIN_*` on Worker; empty DB on first boot |
 
 ---
 
 ## License
 
-Apache-2.0 (upstream license).
+Apache-2.0.
 
 ## Credits
 
-- [typix](https://github.com/monkeyWie/typix) / [typix-image](https://github.com/kiseding/typix-image)
+[typix](https://github.com/monkeyWie/typix) / [typix-image](https://github.com/kiseding/typix-image)

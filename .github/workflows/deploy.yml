@@ -33,6 +33,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Inject D1 database ID
+        env:
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_D1_DATABASE_ID" ]; then
+            echo "Missing secret: CLOUDFLARE_D1_DATABASE_ID"
+            exit 1
+          fi
+          # Patch only the in-runner config; never commit real IDs
+          node -e "
+            const fs = require('fs');
+            const id = process.env.CLOUDFLARE_D1_DATABASE_ID;
+            let t = fs.readFileSync('wrangler.toml', 'utf8');
+            t = t.replace(
+              /database_id\\s*=\\s*\"[^\"]*\"/,
+              'database_id = \"' + id + '\"'
+            );
+            fs.writeFileSync('wrangler.toml', t);
+            console.log('Injected D1 database_id');
+          "
+
       - name: Build
         run: pnpm build
         env:
@@ -45,7 +66,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy Worker
-        run: pnpm deploy:no-migrate
+        run: pnpm exec wrangler deploy --keep-vars
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

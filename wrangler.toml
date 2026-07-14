@@ -12,7 +12,8 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "image2cf"
-database_id = "62b34e36-d01a-4e06-a711-2ee6e1f57fa3"           # Replace with your actual database ID
+# Injected at deploy time from env CLOUDFLARE_D1_DATABASE_ID (see .github/workflows/deploy.yml)
+database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "drizzle/migrations"
 
 [ai]
