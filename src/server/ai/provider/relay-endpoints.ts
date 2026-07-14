@@ -1,13 +1,10 @@
-import { extractImagesFromAny } from "@/server/lib/image-parse";
+import { extractImagesFromAny, summarizeRelayPayload } from "@/server/lib/image-parse";
 import type { TypixChatApiResponse, TypixGenerateRequest } from "../types/api";
 import { normalizeOpenAIBaseURL } from "./relay-presets";
 
 export type RelayEndpoints = {
-	/** 文生图 · text-to-image */
 	t2i: string;
-	/** 图生图 · image-to-image (prompt + image) */
 	i2i: string;
-	/** 编辑图片 · edit (prompt + image, optional mask; OpenAI /images/edits) */
 	edit: string;
 };
 
@@ -63,57 +60,82 @@ const sizeMap: Record<string, string> = {
 	"3:4": "1024x1536",
 };
 
-/** Relay fetch timeout (ms). Large b64 bodies can hang; fail cleanly instead of stuck UI. */
-const RELAY_FETCH_TIMEOUT_MS = 90_000;
-/** Max response body to parse (bytes). Prevents multi-minute base64 text reads. */
-const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
+/** Default upstream timeout (ms) */
+const RELAY_FETCH_TIMEOUT_MS = 180_000;
+/** Allow large b64_json bodies (gpt-image can be multi‑MB) */
+const MAX_RESPONSE_BYTES = 40 * 1024 * 1024;
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = RELAY_FETCH_TIMEOUT_MS) {
+export type RelayCallMeta = {
+	url: string;
+	kind: string;
+	httpStatus?: number;
+	ok?: boolean;
+	bodyBytes?: number;
+	parseSummary?: Record<string, unknown>;
+	imageCount?: number;
+	error?: string;
+	ms?: number;
+};
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = RELAY_FETCH_TIMEOUT_MS, externalSignal?: AbortSignal) {
 	const ctrl = new AbortController();
+	const onAbort = () => ctrl.abort();
+	if (externalSignal) {
+		if (externalSignal.aborted) ctrl.abort();
+		else externalSignal.addEventListener("abort", onAbort, { once: true });
+	}
 	const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 	try {
 		return await fetch(url, { ...init, signal: ctrl.signal });
 	} finally {
 		clearTimeout(timer);
+		externalSignal?.removeEventListener("abort", onAbort);
 	}
 }
 
-async function readResponseTextLimited(resp: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<string> {
+async function readResponseText(resp: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<{ text: string; bytes: number }> {
 	const cl = resp.headers.get("content-length");
 	if (cl && Number(cl) > maxBytes) {
 		throw Object.assign(new Error(`Response too large: ${cl} bytes`), { name: "AbortError" });
 	}
-	// Prefer arrayBuffer with size check over unbounded text()
 	const buf = await resp.arrayBuffer();
 	if (buf.byteLength > maxBytes) {
 		throw Object.assign(new Error(`Response too large: ${buf.byteLength} bytes`), { name: "AbortError" });
 	}
-	return new TextDecoder().decode(buf);
+	return { text: new TextDecoder().decode(buf), bytes: buf.byteLength };
 }
 
-async function parseOkResponse(text: string, json: any): Promise<TypixChatApiResponse> {
+async function parseOkResponse(text: string, json: any): Promise<{ images: string[]; summary: Record<string, unknown> }> {
+	const summary = summarizeRelayPayload(json, text);
 	const images = await extractImagesFromAny(json, { preferUrl: true });
-	if (images.length) return { images };
+	if (images.length) return { images, summary };
 	if (text.startsWith("http") || text.startsWith("data:image")) {
-		return { images: [text.trim()] };
+		return { images: [text.trim()], summary };
 	}
-	// Some relays wrap JSON as string
 	if (typeof json === "string") {
 		try {
 			const nested = JSON.parse(json);
 			const imgs2 = await extractImagesFromAny(nested, { preferUrl: true });
-			if (imgs2.length) return { images: imgs2 };
+			if (imgs2.length) return { images: imgs2, summary: summarizeRelayPayload(nested, text) };
 		} catch {
 			/* ignore */
 		}
 	}
-	console.error("[relay] ok but no images parsed:", text.slice(0, 800));
-	return { errorReason: "API_ERROR", images: [] };
+	// last resort: scan entire text for data-uri or https image urls
+	const dataUris = text.match(/data:image\/[a-zA-Z0-9+.-]+;base64,[A-Za-z0-9+/=\r\n_-]{80,}/g);
+	if (dataUris?.length) {
+		return { images: dataUris.map((s) => s.replace(/\s+/g, "")), summary };
+	}
+	const httpImgs = text.match(/https?:\/\/[^\s"'\\]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s"'\\]*)?/gi);
+	if (httpImgs?.length) {
+		return { images: [...new Set(httpImgs)], summary };
+	}
+	console.error("[relay] ok but no images parsed:", summary);
+	return { images: [], summary };
 }
 
 /**
  * Call OpenAI-compatible image endpoints with custom paths.
- * Prefer URL responses when possible; always accept b64_json too.
  */
 export async function generateViaEndpointPaths(params: {
 	baseURL: string;
@@ -122,6 +144,9 @@ export async function generateViaEndpointPaths(params: {
 	request: TypixGenerateRequest;
 	endpoints?: Partial<RelayEndpoints> | null;
 	preferEdit?: boolean;
+	signal?: AbortSignal;
+	/** Collect diagnostics for DB progress */
+	onMeta?: (meta: RelayCallMeta) => void;
 }): Promise<TypixChatApiResponse> {
 	const baseURL = normalizeOpenAIBaseURL(params.baseURL);
 	const endpoints = normalizeEndpoints(params.endpoints);
@@ -139,8 +164,9 @@ export async function generateViaEndpointPaths(params: {
 				: undefined;
 	const width = params.request.width;
 	const height = params.request.height;
+	const t0 = Date.now();
 
-	const baseBody = {
+	const baseBody: Record<string, unknown> = {
 		model,
 		prompt: params.request.prompt,
 		n,
@@ -149,20 +175,29 @@ export async function generateViaEndpointPaths(params: {
 		...(height ? { height } : {}),
 	};
 
+	const report = (meta: Partial<RelayCallMeta>) => {
+		params.onMeta?.({ url, kind, ms: Date.now() - t0, ...meta });
+	};
+
 	try {
 		let resp: Response;
 
 		if (kind === "t2i") {
-			// Do NOT force response_format first — many Chinese relays reject or ignore it.
-			// Prefer natural response (url or b64_json). Retry with url / without format if needed.
-			resp = await fetchWithTimeout(url, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${params.apiKey}`,
-					"Content-Type": "application/json",
+			// Try without response_format first (widest relay compatibility)
+			resp = await fetchWithTimeout(
+				url,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${params.apiKey}`,
+						"Content-Type": "application/json",
+						Accept: "application/json",
+					},
+					body: JSON.stringify(baseBody),
 				},
-				body: JSON.stringify(baseBody),
-			});
+				RELAY_FETCH_TIMEOUT_MS,
+				params.signal,
+			);
 		} else {
 			const form = new FormData();
 			form.append("model", model);
@@ -176,7 +211,7 @@ export async function generateViaEndpointPaths(params: {
 			if (images[0]) {
 				const dataUri = images[0];
 				if (dataUri.startsWith("http")) {
-					const r = await fetchWithTimeout(dataUri, {}, 30_000);
+					const r = await fetchWithTimeout(dataUri, {}, 60_000, params.signal);
 					const buf = await r.arrayBuffer();
 					const mime = r.headers.get("content-type") || "image/png";
 					const ext = (mime.split("/")[1] || "png").split(";")[0] || "png";
@@ -189,7 +224,7 @@ export async function generateViaEndpointPaths(params: {
 			for (let i = 1; i < images.length; i++) {
 				const img = images[i]!;
 				if (img.startsWith("http")) {
-					const r = await fetchWithTimeout(img, {}, 30_000);
+					const r = await fetchWithTimeout(img, {}, 60_000, params.signal);
 					const buf = await r.arrayBuffer();
 					const mime = r.headers.get("content-type") || "image/png";
 					form.append("image[]", new Blob([buf], { type: mime }), `image${i}.png`);
@@ -200,16 +235,22 @@ export async function generateViaEndpointPaths(params: {
 				}
 			}
 
-			resp = await fetchWithTimeout(url, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${params.apiKey}`,
+			resp = await fetchWithTimeout(
+				url,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${params.apiKey}`,
+						Accept: "application/json",
+					},
+					body: form,
 				},
-				body: form,
-			});
+				RELAY_FETCH_TIMEOUT_MS,
+				params.signal,
+			);
 		}
 
-		const text = await readResponseTextLimited(resp);
+		const { text, bytes } = await readResponseText(resp);
 		let json: any = null;
 		try {
 			json = JSON.parse(text);
@@ -217,28 +258,45 @@ export async function generateViaEndpointPaths(params: {
 			/* ignore */
 		}
 
+		report({ httpStatus: resp.status, ok: resp.ok, bodyBytes: bytes });
+
 		if (!resp.ok) {
 			const msg = json?.error?.message || json?.message || text.slice(0, 300);
 
-			// Retry t2i once with response_format=url if first failed on format issues
-			if (kind === "t2i" && /response_format|unknown|invalid|format/i.test(String(msg))) {
-				const retry = await fetchWithTimeout(url, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${params.apiKey}`,
-						"Content-Type": "application/json",
+			// Retry t2i with b64_json if relay complains about format / empty
+			if (kind === "t2i") {
+				const retry = await fetchWithTimeout(
+					url,
+					{
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${params.apiKey}`,
+							"Content-Type": "application/json",
+							Accept: "application/json",
+						},
+						body: JSON.stringify({ ...baseBody, response_format: "b64_json" }),
 					},
-					body: JSON.stringify({ ...baseBody, response_format: "b64_json" }),
-				});
-				const retryText = await readResponseTextLimited(retry);
+					RELAY_FETCH_TIMEOUT_MS,
+					params.signal,
+				);
+				const retryRead = await readResponseText(retry);
 				let retryJson: any = null;
 				try {
-					retryJson = JSON.parse(retryText);
+					retryJson = JSON.parse(retryRead.text);
 				} catch {
 					/* ignore */
 				}
 				if (retry.ok) {
-					return await parseOkResponse(retryText, retryJson);
+					const parsed = await parseOkResponse(retryRead.text, retryJson);
+					report({
+						httpStatus: retry.status,
+						ok: true,
+						bodyBytes: retryRead.bytes,
+						parseSummary: parsed.summary,
+						imageCount: parsed.images.length,
+					});
+					if (parsed.images.length) return { images: parsed.images };
+					return { errorReason: "API_ERROR", images: [] };
 				}
 			}
 
@@ -246,20 +304,35 @@ export async function generateViaEndpointPaths(params: {
 				return generateViaEndpointPaths({ ...params, preferEdit: true });
 			}
 			if (resp.status === 401 || resp.status === 403) {
+				report({ error: msg, httpStatus: resp.status });
 				return { errorReason: "CONFIG_ERROR", images: [] };
 			}
 			if (resp.status === 429) {
 				return { errorReason: "TOO_MANY_REQUESTS", images: [] };
 			}
 			console.error(`[relay] ${kind} ${url} failed:`, resp.status, msg);
+			report({ error: String(msg).slice(0, 200), httpStatus: resp.status, parseSummary: summarizeRelayPayload(json, text) });
 			return { errorReason: "API_ERROR", images: [] };
 		}
 
-		return await parseOkResponse(text, json);
+		const parsed = await parseOkResponse(text, json);
+		report({
+			httpStatus: resp.status,
+			ok: true,
+			bodyBytes: bytes,
+			parseSummary: parsed.summary,
+			imageCount: parsed.images.length,
+		});
+		if (!parsed.images.length) {
+			console.error("[relay] empty parse", url, parsed.summary);
+			return { errorReason: "API_ERROR", images: [] };
+		}
+		return { images: parsed.images };
 	} catch (e: any) {
 		const name = e?.name || "";
 		const msg = e?.message || String(e);
 		console.error(`[relay] ${kind} request error:`, msg);
+		report({ error: msg.slice(0, 200) });
 		if (name === "AbortError" || /aborted|timeout/i.test(msg)) {
 			return { errorReason: "TIMEOUT", images: [] };
 		}

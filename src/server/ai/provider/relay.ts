@@ -31,6 +31,7 @@ export interface RelayConfig {
 export async function generateViaRelay(
 	request: TypixGenerateRequest,
 	relay: RelayConfig,
+	opts?: { signal?: AbortSignal; onMeta?: (m: any) => void },
 ): Promise<TypixChatApiResponse> {
 	const modelId = relay.modelId || request.modelId;
 
@@ -52,6 +53,8 @@ export async function generateViaRelay(
 			model: modelId,
 			request: { ...request, modelId },
 			endpoints,
+			signal: opts?.signal,
+			onMeta: opts?.onMeta,
 		});
 
 	const viaImagesSdk = () =>
@@ -68,6 +71,7 @@ export async function generateViaRelay(
 			request: { ...request, modelId },
 		});
 
+	// Prefer path-based endpoints for gpt-image-* (responses often hangs or returns non-image)
 	if (mode === "endpoints") {
 		return await viaEndpoints();
 	}
@@ -78,13 +82,8 @@ export async function generateViaRelay(
 		return await viaResponses();
 	}
 
-	// auto: endpoints first (path-based), then responses for gpt-image, then images SDK
-	const hasImages = !!(request.images && request.images.length > 0);
-	const tryOrder = hasImages
-		? [viaEndpoints, viaResponses, viaImagesSdk]
-		: /gpt-image|image-1/i.test(modelId)
-			? [viaResponses, viaEndpoints, viaImagesSdk]
-			: [viaEndpoints, viaImagesSdk, viaResponses];
+	// auto: endpoints first always (most Chinese relays)
+	const tryOrder = [viaEndpoints, viaImagesSdk, viaResponses];
 
 	let last: TypixChatApiResponse = { images: [] };
 	let lastErr: unknown;

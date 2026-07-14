@@ -1,3 +1,4 @@
+import { generateViaRelay } from "@/server/ai/provider/relay";
 import { extractImagesFromAny } from "@/server/lib/image-parse";
 import { readWorkerEnv } from "@/server/lib/worker-env";
 import { getContext } from "@/server/service/context";
@@ -158,6 +159,60 @@ const app = new Hono<Env>()
 			}),
 		);
 	})
+
+	/** One-shot relay call to verify we can parse the response (does not create chat) */
+	.post("/relay-probe", async (c) => {
+		const { db } = getContext();
+		let body: any = {};
+		try {
+			body = await c.req.json();
+		} catch {
+			/* empty */
+		}
+		const relayId = String(body.relayId || "").replace(/^relay:/, "");
+		const model = String(body.model || "");
+		const prompt = String(body.prompt || "a red apple");
+		if (!relayId) return c.json({ code: "error", message: "relayId required" }, 400);
+		const row = await db.query.userRelays.findFirst({
+			where: eq(userRelays.id, relayId),
+		});
+		if (!row) return c.json({ code: "not_found", message: "relay not found" }, 404);
+		const modelId = model || ((row.models as any[])?.[0]?.id as string) || "";
+		if (!modelId) return c.json({ code: "error", message: "model required" }, 400);
+		const metas: any[] = [];
+		const result = await generateViaRelay(
+			{
+				providerId: `relay:${relayId}`,
+				modelId,
+				prompt,
+				n: 1,
+			},
+			{
+				type: row.type as any,
+				baseURL: row.baseURL,
+				apiKey: row.apiKey,
+				modelId,
+				apiMode: (row as any).apiMode || "endpoints",
+				endpoints: (row as any).endpoints || null,
+			},
+			{
+				onMeta: (m) => metas.push(m),
+			},
+		);
+		return c.json(
+			ok({
+				errorReason: result.errorReason || null,
+				imageCount: result.images?.length || 0,
+				imageKinds: (result.images || []).map((img) =>
+					img.startsWith("data:")
+						? { kind: "data-uri", length: img.length }
+						: { kind: "url", value: img.slice(0, 120) },
+				),
+				metas,
+			}),
+		);
+	})
+
 	.get("/relays", async (c) => {
 		const { db } = getContext();
 		const rows = await db.query.userRelays.findMany({

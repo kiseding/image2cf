@@ -598,8 +598,10 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 
 		// Soft progress while waiting on upstream (most image APIs are not streamable)
 		const wallStart = Date.now();
-		const WALL_MS = 150_000; // hard cap 2.5 min for whole upstream call
+		const WALL_MS = 200_000;
 		let soft = 25;
+		let lastMeta: any = null;
+		const abortCtrl = new AbortController();
 		await setGenerationProgress(
 			generationId,
 			"calling_api",
@@ -616,52 +618,67 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				generationId,
 				"calling_api",
 				soft,
-				{ message: "waiting_upstream" },
+				{ message: "waiting_upstream", meta: lastMeta || undefined },
 				{ touchRow: false },
 			).catch(() => {});
 		}, 3000);
 
 		let result;
 		try {
-			const callUpstream = async () => {
+			const wallTimer = setTimeout(() => abortCtrl.abort(), WALL_MS);
+			try {
 				if (isRelay) {
 					const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
-					return await generateViaRelay(generateRequest, {
-						type: relay!.type,
-						baseURL: relay!.baseURL,
-						apiKey: relay!.apiKey,
-						modelId,
-						apiMode: relay!.apiMode || "endpoints",
-						endpoints: relay!.endpoints || null,
-					});
+					result = await generateViaRelay(
+						generateRequest,
+						{
+							type: relay!.type,
+							baseURL: relay!.baseURL,
+							apiKey: relay!.apiKey,
+							modelId,
+							apiMode: relay!.apiMode || "endpoints",
+							endpoints: relay!.endpoints || null,
+						},
+						{
+							signal: abortCtrl.signal,
+							onMeta: (m) => {
+								lastMeta = m;
+							},
+						},
+					);
+				} else {
+					const providerInstance = getProviderById(providerId);
+					const provider = await aiService.getAiProviderById({ providerId }, ctx);
+					const settings =
+						provider?.settings?.reduce((acc, setting) => {
+							const value = setting.value ?? setting.defaultValue;
+							if (value !== undefined) {
+								acc[setting.key] = value;
+							}
+							return acc;
+						}, {} as ApiProviderSettings) ?? {};
+					result = await providerInstance.generate(generateRequest, settings);
 				}
-				const providerInstance = getProviderById(providerId);
-				const provider = await aiService.getAiProviderById({ providerId }, ctx);
-				const settings =
-					provider?.settings?.reduce((acc, setting) => {
-						const value = setting.value ?? setting.defaultValue;
-						if (value !== undefined) {
-							acc[setting.key] = value;
-						}
-						return acc;
-					}, {} as ApiProviderSettings) ?? {};
-				return await providerInstance.generate(generateRequest, settings);
-			};
-
-			// Race: upstream vs wall clock (fetch timeout alone may not cover body read hangs)
-			result = await Promise.race([
-				callUpstream(),
-				new Promise<never>((_, reject) => {
-					setTimeout(() => reject(Object.assign(new Error("Generation wall timeout"), { name: "AbortError" })), WALL_MS);
-				}),
-			]);
-			console.log("[generate] upstream done", generationId, "ms", Date.now() - wallStart, "images", result?.images?.length);
+			} finally {
+				clearTimeout(wallTimer);
+			}
+			console.log(
+				"[generate] upstream done",
+				generationId,
+				"ms",
+				Date.now() - wallStart,
+				"images",
+				result?.images?.length,
+				"meta",
+				JSON.stringify(lastMeta || {}).slice(0, 300),
+			);
 		} catch (upErr: any) {
 			clearInterval(softTimer);
 			const isTimeout = upErr?.name === "AbortError" || /timeout|aborted/i.test(String(upErr?.message || upErr));
-			console.error("[generate] upstream failed", generationId, upErr);
+			console.error("[generate] upstream failed", generationId, upErr, lastMeta);
 			await setGenerationProgress(generationId, "failed", 100, {
 				message: isTimeout ? "upstream_timeout" : String(upErr?.message || upErr).slice(0, 120),
+				meta: lastMeta || undefined,
 			});
 			await db
 				.update(messageGenerations)
@@ -676,10 +693,16 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			clearInterval(softTimer);
 		}
 
-		await setGenerationProgress(generationId, "parsing", 85, { message: "parsing_response" });
+		await setGenerationProgress(generationId, "parsing", 85, {
+			message: "parsing_response",
+			meta: lastMeta || undefined,
+		});
 
 		if (result.errorReason) {
-			await setGenerationProgress(generationId, "failed", 100, { message: result.errorReason });
+			await setGenerationProgress(generationId, "failed", 100, {
+				message: result.errorReason,
+				meta: lastMeta || undefined,
+			});
 			await db
 				.update(messageGenerations)
 				.set({
@@ -692,8 +715,11 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		}
 
 		if (!result.images?.length) {
-			console.error("Image generation returned no images", { providerId, modelId });
-			await setGenerationProgress(generationId, "failed", 100, { message: "no_images" });
+			console.error("Image generation returned no images", { providerId, modelId, lastMeta });
+			await setGenerationProgress(generationId, "failed", 100, {
+				message: "no_images_parsed",
+				meta: lastMeta || undefined,
+			});
 			await db
 				.update(messageGenerations)
 				.set({
