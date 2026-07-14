@@ -1,222 +1,190 @@
-# Typix - Type To Pixels
+# image2cf
+
+Multi-user AI image generation platform with admin-managed users, custom relay stations, and image-to-image references. Deploy to Cloudflare Workers or Node.js.
+
+Forked and extended from [typix-image](https://github.com/kiseding/typix-image).
 
 <p align="center">
-  <a href="https://github.com/monkeyWie/typix/releases"><img src="https://img.shields.io/github/v/release/monkeyWie/typix.svg" alt="Version"></a>
-  <a href="https://hub.docker.com/r/liwei2633/typix"><img src="https://img.shields.io/docker/v/liwei2633/typix?label=Docker&color=blue" alt="Docker"></a>
-  <a href="https://www.apache.org/licenses/LICENSE-2.0"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="License"></a>
+  <a href="README.md">简体中文</a> | English
 </p>
-
-<p align="center"><a href="README.md">简体中文</a> | English</p>
-
-Typix is a modern, open-source, user-friendly, and privacy-secure AI tool focused on media content generation, providing creators with a one-stop generation experience, supporting one-click deployment to Cloudflare Workers and free use of Cloudflare Workers AI models.
-
-![](docs/public/images/demo/preview.png)
-
-## 🎯 Quick Start
-
-No registration required, instantly experience premium AI image generation services, including cutting-edge models like Flux and SDXL (daily free quota limited, first come first served).
-
-- [https://typix.art](https://typix.art)
-  Production-grade stable version with cloud sync support
-- [https://preview.typix.art](https://preview.typix.art)
-  Get early access to the latest features and improvements
-
-## ✨ Core Features
-
-Focus on AI image generation, turning creativity into visual art instantly
-
-- 📱 **Local First** - Prioritize local storage and offline functionality
-- 🏠 **Self-hosted** - Full control over your data and privacy
-- 🎁 **Free Generation** - Free image generation with Cloudflare Workers AI
-- ☁️ **One-click Deploy** - Quick deployment with Docker and Cloudflare Workers
-- 🤖 **Multi-model Support** - Support multiple AI models and service providers
-- 🔄 **Cloud Sync** - Seamlessly sync your content across all devices
-
-## 🔒 Data Security
-
-Typix puts your data security and privacy protection first:
-
-- **🛡️ Browser Local Storage** - Based on WASM SQLite technology, all data is completely stored in your browser
-- **🔐 Zero Data Upload** - Your creative content, settings and other sensitive data never leave your device
-- **🚫 No Server Dependencies** - Client mode requires no external server dependencies, ensuring data sovereignty
-- **🔄 Optional Cloud Sync** - Support for optional cloud sync functionality
-
-We protect both your creativity and privacy.
-
-## ⚡ Powered by Leading AI Models
-
-Integrated with cutting-edge AI models and services to provide the best image generation experience:
-
-- **Google** - Advanced AI models with cutting-edge image generation capabilities
-- **OpenAI** - Industry-leading AI technology
-- **Flux** - High-quality image generation models
-- **Fal** - Fast AI inference service
-- **Cloudflare** - Free AI model support
-
-More service providers and models are being integrated continuously.
-
-## 🚀 Quick Deployment
-
-### One-click Deploy to Cloudflare Workers (Recommended)
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/monkeyWie/typix)
-
-Cloudflare Workers deployment provides free access to Cloudflare AI image generation services.
-
-> After successful deployment, you'll get a `typix.xxx.workers.dev` domain to start using!
-
-### Docker Deployment
-
-```bash
-docker run --name typix -d -p 9999:9999 liwei2633/typix
-```
-
-### Node.js Deployment
-
-#### Prerequisites
-
-- Node.js 20+
-- pnpm or npm
-
-#### Deployment Steps
-
-1. **Clone and install**
-
-```bash
-git clone https://github.com/monkeyWie/typix.git
-cd typix
-pnpm install
-```
-
-2. **Configure environment variables**
-
-```bash
-cp .env.node.example .env
-# Edit .env file to configure necessary parameters
-```
-
-3. **Database initialization**
-
-```bash
-pnpm db:generate
-pnpm db:migrate
-```
-
-4. **Build project**
-
-```bash
-pnpm build:node
-```
-
-5. **Start service**
-
-```bash
-node .bin/node.js
-```
-
-## 🛠️ Development Documentation
-
-### Tech Stack
-
-**Frontend:**
-
-- **React 18** - Modern UI framework
-- **TypeScript** - Type-safe JavaScript
-- **Tailwind CSS** - Atomic CSS framework
-- **shadcn/ui** - High-quality UI component library
-- **Tanstack Router** - Type-safe routing management
-- **Zustand** - Lightweight state management
-- **BetterAuth** - Modern authentication solution
-
-**Backend:**
-
-- **Hono.js** - Lightweight web framework
-- **SQLite** - Embedded database
-- **Drizzle ORM** - Type-safe ORM
-
-**Development Tools:**
-
-- **Vite** - Fast build tool
-- **Biome** - Code formatting and linting
-- **pnpm** - Package manager
-
-### Local Development Guide
-
-#### Environment Setup
-
-1. **Install Node.js 20+**
-2. **Install pnpm**
-
-```bash
-npm install -g pnpm
-```
-
-#### Development Workflow
-
-1. **Clone project**
-
-```bash
-git clone https://github.com/monkeyWie/typix.git
-cd typix
-```
-
-2. **Install dependencies**
-
-```bash
-pnpm install
-```
-
-3. **Database initialization**
-
-```bash
-# Generate database migration files
-pnpm db:generate
-
-# Execute migration
-pnpm db:migrate
-```
-
-4. **Start development server**
-
-```bash
-# Start frontend development server
-pnpm dev
-```
-
-#### Project Structure
-
-```
-src/
-├── app/                    # Frontend application
-│   ├── components/         # React components
-│   ├── hooks/             # Custom Hooks
-│   ├── routes/            # Route pages
-│   ├── stores/            # State management
-│   └── lib/               # Utility libraries
-├── server/                # Backend service
-│   ├── api/               # API routes
-│   ├── ai/                # AI provider integration
-│   ├── db/                # Database schemas
-│   └── service/           # Business logic
-```
-
-## 📄 License
-
-This project is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
-
-You are free to:
-
-- ✅ Commercial use
-- ✅ Modify code
-- ✅ Distribute project
-- ✅ Private use
-
-But you must:
-
-- 📝 Include copyright notice
-- 📝 Include license file
-- 📝 State significant changes
 
 ---
 
-If this project helps you, please consider giving us a ⭐ Star!
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-user** | No public signup; admin creates / bans / resets / deletes users |
+| **Relay stations** | Per-user OpenAI / Google-compatible proxies (Base URL + API Key + models) |
+| **Image references** | One-click reuse of past generations as i2i inputs |
+| **Providers** | Cloudflare Workers AI, OpenAI, Google, Flux, Fal, and more |
+| **Runtimes** | Cloudflare Workers (recommended) / Node.js self-host |
+
+---
+
+## Stack
+
+- **Frontend**: React + Vite + TanStack Router  
+- **Backend**: Hono + better-auth + Drizzle ORM  
+- **DB**: Cloudflare D1 (Workers) / SQLite (Node)  
+- **Mode**: `MODE=mixed` (login required, server-side storage)
+
+---
+
+## Deploy: Cloudflare Workers + GitHub Actions
+
+### Prerequisites
+
+- Cloudflare account  
+- This repo on GitHub  
+- Node.js 20+ (only if editing config locally)
+
+### 1. Create D1 database
+
+Cloudflare Dashboard → **Workers & Pages → D1** → create database (e.g. `image2cf`).
+
+Put the **Database ID** into `wrangler.toml`:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "image2cf"
+database_id = "your-database-id"   # ← replace
+migrations_dir = "drizzle/migrations"
+```
+
+### 2. Create API Token
+
+**My Profile → API Tokens → Create Token**
+
+Suggested permissions:
+
+- Account → Cloudflare Workers → Edit  
+- Account → D1 → Edit  
+- Account → Account Settings → Read  
+
+Note your **API Token** and **Account ID**.
+
+### 3. GitHub Secrets
+
+Repo → **Settings → Secrets and variables → Actions**:
+
+| Name | Value |
+|------|--------|
+| `CLOUDFLARE_API_TOKEN` | API Token |
+| `CLOUDFLARE_ACCOUNT_ID` | Account ID |
+
+### 4. Worker variables / secrets
+
+After first deploy, set in **Workers → image2cf → Settings → Variables** (or `wrangler secret put`):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ADMIN_EMAIL` | ✅ | Bootstrap admin email (created only when user table is empty) |
+| `ADMIN_PASSWORD` | ✅ | Bootstrap admin password |
+| `ADMIN_NAME` | | Display name (default `Admin`) |
+| `PROVIDER_CLOUDFLARE_BUILTIN` | | Use built-in Workers AI (default `true` in `wrangler.toml`) |
+
+### 5. Trigger deploy
+
+- **Auto**: push to `main`  
+- **Manual**: Actions → **Deploy Cloudflare Workers** → Run workflow  
+
+Pipeline: install → build → D1 migrate → `wrangler deploy`.
+
+URL: `https://image2cf.<subdomain>.workers.dev`
+
+### Local deploy (optional)
+
+```bash
+pnpm install
+# edit database_id in wrangler.toml
+pnpm build
+pnpm deploy
+```
+
+---
+
+## Local development (Node.js)
+
+```bash
+git clone https://github.com/kiseding/image2cf.git
+cd image2cf
+pnpm install
+cp .env.node.example .env
+```
+
+`.env` minimum:
+
+```env
+DATABASE_URL="file:./db.sqlite"
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASSWORD="change-me"
+MODE="mixed"
+```
+
+```bash
+pnpm db:push
+pnpm dev
+```
+
+---
+
+## Environment variables
+
+| Variable | Runtime | Description |
+|----------|---------|-------------|
+| `MODE` | all | Use `mixed` |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | all | Bootstrap admin |
+| `PROVIDER_CLOUDFLARE_BUILTIN` | Workers | Built-in Workers AI |
+| `DATABASE_URL` | Node | e.g. `file:./db.sqlite` |
+| `FILE_STORAGE` | Node | `base64` / `disk` / `r2` |
+| `CLOUDFLARE_API_TOKEN` | Actions | Deploy token (secret) |
+| `CLOUDFLARE_ACCOUNT_ID` | Actions | Account ID (secret) |
+
+---
+
+## Usage
+
+1. **Login** with bootstrap admin credentials  
+2. **Settings → Users** — create accounts (no public registration)  
+3. **Settings → Relay stations** — add Base URL, API key, models  
+4. **Settings → AI providers** — configure built-in providers (optional)  
+5. **Chat** — generate images; hover a message → **Use as reference** for i2i  
+
+---
+
+## Scripts
+
+```bash
+pnpm dev                 # local Vite + server
+pnpm dev:worker          # wrangler local
+pnpm build               # Cloudflare build
+pnpm build:node          # Node build
+pnpm db:push             # push schema (local SQLite)
+pnpm db:migrate:worker   # remote D1 migrations
+pnpm deploy              # migrate + deploy Workers
+pnpm deploy:no-migrate   # deploy only (CI)
+```
+
+---
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| Actions auth failure | Check `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` |
+| D1 migrate fails | Verify `database_id` and token D1 permissions |
+| No admin login | Ensure `ADMIN_*` set and DB was empty on first boot |
+| Relay generate fails | Verify Base URL, API key, model IDs |
+| i2i disabled | Switch to a model with I2I ability |
+
+---
+
+## License
+
+Apache-2.0 (upstream license).
+
+## Credits
+
+- [typix](https://github.com/monkeyWie/typix) / [typix-image](https://github.com/kiseding/typix-image)
