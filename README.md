@@ -76,7 +76,6 @@ CI 会在运行时把 `CLOUDFLARE_D1_DATABASE_ID` 注入到临时 `wrangler.toml
 |------|------|------|
 | `ADMIN_PASSWORD` | ✅ | 默认管理员 `admin` 的密码（建议用 Secret） |
 | `ADMIN_NAME` | | 显示名，默认 `Admin` |
-| `ADMIN_FORCE_RESET` | | 设为 `true` 可强制把管理员密码重置为 `ADMIN_PASSWORD`（修好后请删掉） |
 
 部署命令使用 `--keep-vars`，**不会覆盖** Dashboard 上已配置的变量/密钥。
 
@@ -90,7 +89,6 @@ export CLOUDFLARE_D1_DATABASE_ID=...
 npx wrangler secret put ADMIN_PASSWORD
 ```
 
-> `ADMIN_*` 用于引导/修复默认管理员 `admin`（可用 `ADMIN_FORCE_RESET` 重置密码），之后请用后台「用户管理」维护账号。
 
 ### 步骤 5：触发部署
 

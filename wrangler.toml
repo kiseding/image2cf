@@ -34,7 +34,6 @@ MODE = "mixed"
 # Bootstrap admin (username fixed as "admin"; set via Dashboard Secrets)
 # ADMIN_PASSWORD = "change-me"
 # ADMIN_NAME = "Admin"
-# ADMIN_FORCE_RESET = "true"   # set true once to reset admin password, then remove
 # GOOGLE_ANALYTICS_ID = "G-0T65G1J5DT"
 
 # Authentication configuration, only for mixed mode

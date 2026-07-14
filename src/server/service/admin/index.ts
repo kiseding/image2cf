@@ -1,5 +1,6 @@
 import { account, user } from "@/server/db/schemas";
-import { hashPassword, normalizeUsername, usernameToEmail } from "@/server/lib/auth";
+import { normalizeUsername, usernameToEmail } from "@/server/lib/auth";
+import { hashPassword } from "@/server/lib/password";
 import { ServiceException } from "@/server/lib/exception";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";

@@ -1,4 +1,3 @@
-import { scryptSync } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
@@ -35,42 +34,6 @@ export function usernameToEmail(username: string) {
 
 export function normalizeUsername(value: string) {
 	return value.trim().toLowerCase();
-}
-
-export async function hashPassword(password: string) {
-	const salt = crypto.getRandomValues(new Uint8Array(16));
-	const saltHex = Array.from(salt)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-
-	const key = scryptSync(password.normalize("NFKC"), saltHex, 64, {
-		N: 16384,
-		r: 16,
-		p: 1,
-		maxmem: 128 * 16384 * 16 * 2,
-	});
-
-	const keyHex = Array.from(key)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return `${saltHex}:${keyHex}`;
-}
-
-export async function verifyPassword(hash: string, password: string) {
-	const [saltHex, keyHex] = hash.split(":");
-	if (!saltHex || !keyHex) return false;
-
-	const targetKey = scryptSync(password.normalize("NFKC"), saltHex, 64, {
-		N: 16384,
-		r: 16,
-		p: 1,
-		maxmem: 128 * 16384 * 16 * 2,
-	});
-
-	const targetKeyHex = Array.from(targetKey)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return targetKeyHex === keyHex;
 }
 
 export const createAuth = (db: any, config?: AuthConfig) =>
@@ -110,10 +73,7 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 			enabled: true,
 			disableSignUp: config?.disableSignUp !== false,
 			requireEmailVerification: false,
-			password: {
-				hash: hashPassword,
-				verify: async ({ hash, password }) => verifyPassword(hash, password),
-			},
+			// Use better-auth default scrypt (works on Cloudflare Workers)
 		},
 		databaseHooks: {
 			session: {
@@ -136,7 +96,6 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 			username({
 				minUsernameLength: 2,
 				maxUsernameLength: 32,
-				// Always lowercase before DB lookup so login matches stored username
 				usernameNormalization: (u) => normalizeUsername(u),
 				validationOrder: {
 					username: "pre-normalization",

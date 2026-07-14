@@ -1,103 +1,109 @@
 import type { DrizzleDb } from "@/server/db";
 import { account, user } from "@/server/db/schemas";
-import { hashPassword, normalizeUsername, usernameToEmail } from "@/server/lib/auth";
+import { usernameToEmail } from "@/server/lib/auth";
+import { hashPassword } from "@/server/lib/password";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
+const ADMIN_USERNAME = "admin";
+
+// Once per Worker isolate / Node process
+let bootstrapped = false;
+
 /**
- * Ensure bootstrap admin exists and can log in with username.
- *
- * Default admin username is always "admin".
- * Only ADMIN_PASSWORD is required (Dashboard secret / env).
- *
- * Behaviors:
- * 1. Missing admin → create admin/admin-password
- * 2. Admin exists → refresh password when ADMIN_FORCE_RESET=true
- * 3. Legacy user without username → backfill username=admin + password
+ * Ensure default admin exists.
+ * Username is always "admin". Password comes from ADMIN_PASSWORD.
+ * Password is always synced from ADMIN_PASSWORD so login never drifts.
  */
 export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
+	if (bootstrapped) return;
 	const password = env.ADMIN_PASSWORD as string | undefined;
 	if (!password) {
 		console.log("[image2cf] Skip admin bootstrap: ADMIN_PASSWORD not set");
 		return;
 	}
 
-	// Fixed default admin account name
-	const username = "admin";
+	const username = ADMIN_USERNAME;
 	const name = (env.ADMIN_NAME as string) || "Admin";
 	const email = usernameToEmail(username);
-	const forceReset = String(env.ADMIN_FORCE_RESET || "").toLowerCase() === "true";
 
 	try {
-		const byUsername = await db.query.user.findFirst({
+		let admin = await db.query.user.findFirst({
 			where: eq(user.username, username),
 		});
 
-		if (byUsername) {
-			if (forceReset) {
-				await resetCredentialPassword(db, byUsername.id, password);
-				console.log(`[image2cf] Reset password for admin: ${username}`);
-			} else {
-				console.log(`[image2cf] Admin already exists: ${username}`);
+		// Legacy users without username field
+		if (!admin) {
+			const byEmail = await db.query.user.findFirst({
+				where: eq(user.email, email),
+			});
+			if (byEmail) {
+				await db
+					.update(user)
+					.set({
+						username,
+						displayUsername: name,
+						name: byEmail.name || name,
+						role: "admin",
+						emailVerified: true,
+						banned: false,
+						updatedAt: new Date(),
+					})
+					.where(eq(user.id, byEmail.id));
+				admin = { ...byEmail, username, role: "admin" } as any;
+				console.log("[image2cf] Backfilled username for admin");
 			}
-			// ensure role admin
-			if (byUsername.role !== "admin") {
-				await db.update(user).set({ role: "admin", updatedAt: new Date() }).where(eq(user.id, byUsername.id));
-			}
+		}
+
+		if (!admin) {
+			const userId = nanoid();
+			const now = new Date();
+			const passwordHash = await hashPassword(password);
+
+			await db.insert(user).values({
+				id: userId,
+				name,
+				email,
+				emailVerified: true,
+				username,
+				displayUsername: name,
+				role: "admin",
+				banned: false,
+				createdAt: now,
+				updatedAt: now,
+			});
+
+			await db.insert(account).values({
+				id: nanoid(),
+				accountId: userId,
+				providerId: "credential",
+				userId,
+				password: passwordHash,
+				createdAt: now,
+				updatedAt: now,
+			});
+
+			console.log(`[image2cf] Created admin user "${username}"`);
+			bootstrapped = true;
 			return;
 		}
 
-		// Legacy: user created before username field, match synthetic/local email
-		const byEmail = await db.query.user.findFirst({
-			where: eq(user.email, email),
-		});
-		if (byEmail) {
-			await db
-				.update(user)
-				.set({
-					username,
-					displayUsername: name,
-					name: byEmail.name || name,
-					role: "admin",
-					emailVerified: true,
-					updatedAt: new Date(),
-				})
-				.where(eq(user.id, byEmail.id));
-			await resetCredentialPassword(db, byEmail.id, password);
-			console.log(`[image2cf] Backfilled username for existing user: ${username}`);
-			return;
-		}
+		// Ensure role / not banned / username set
+		await db
+			.update(user)
+			.set({
+				username,
+				role: "admin",
+				banned: false,
+				emailVerified: true,
+				updatedAt: new Date(),
+			})
+			.where(eq(user.id, admin.id));
 
-		// Only create when no users, OR always create this admin if missing
-		// (allow creating admin even if other users exist — needed after broken boots)
-		const userId = nanoid();
-		const now = new Date();
-		const passwordHash = await hashPassword(password);
-
-		await db.insert(user).values({
-			id: userId,
-			name,
-			email,
-			emailVerified: true,
-			username,
-			displayUsername: name,
-			role: "admin",
-			banned: false,
-			createdAt: now,
-			updatedAt: now,
-		});
-
-		await db.insert(account).values({
-			id: nanoid(),
-			accountId: userId,
-			providerId: "credential",
-			userId,
-			password: passwordHash,
-			createdAt: now,
-			updatedAt: now,
-		});
-
-		console.log(`[image2cf] Bootstrapped admin user: ${username}`);
+		// Always sync password from env so ADMIN_PASSWORD is the source of truth
+		await resetCredentialPassword(db, admin.id, password);
+		console.log(`[image2cf] Admin ready: username="${username}" (password synced from ADMIN_PASSWORD)`);
+		bootstrapped = true;
 	} catch (e) {
 		console.error("[image2cf] Failed to bootstrap admin:", e);
 	}
@@ -112,7 +118,11 @@ async function resetCredentialPassword(db: DrizzleDb, userId: string, password: 
 	if (existingAccount) {
 		await db
 			.update(account)
-			.set({ password: passwordHash, providerId: "credential", updatedAt: now })
+			.set({
+				password: passwordHash,
+				providerId: "credential",
+				updatedAt: now,
+			})
 			.where(eq(account.id, existingAccount.id));
 	} else {
 		await db.insert(account).values({
