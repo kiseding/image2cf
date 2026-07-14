@@ -101,7 +101,7 @@
 		"sections": {
 			"common": "General Settings",
 			"provider": "AI Providers",
-			"relay": "Relay Stations",
+			"relay": "Image Relays",
 			"users": "User Management"
 		},
 		"provider": {
@@ -129,7 +129,7 @@
 		"relay": {
 			"title": "Relay Stations",
 			"description": "Configure custom API relay stations and API keys",
-			"hint": "Supports OpenAI / Google compatible relays (e.g. APIKEY.FUN). Multiple allowed.",
+			"hint": "Image relay: protocol + Base URL + API Key + image models",
 			"add": "Add Relay",
 			"edit": "Edit Relay",
 			"empty": "No relays yet. Click above to add one.",
@@ -152,8 +152,26 @@
 			"preset": "Preset",
 			"presetPlaceholder": "Choose a preset or custom",
 			"custom": "Custom",
-			"openaiBaseHint": "OpenAI-compatible base should end with /v1, e.g. https://api.apikey.fun/v1",
-			"googleBaseHint": "Google-compatible base is host root, e.g. https://api.apikey.fun (no /v1)"
+			"openaiBaseHint": "OpenAI-compatible base should end with /v1, e.g. https://api.xxx.com/v1",
+			"googleBaseHint": "Google-compatible base is host root, e.g. https://api.xxx.com (no /v1)",
+			"formTitle": "Image relays",
+			"genericHint": "Image generation only: connect any OpenAI / Google-compatible relay image models. Switch stations by changing Base URL + API Key, then fetch or enter image model IDs.",
+			"step1": "Pick protocol (OpenAI images or Google images)",
+			"step2": "Enter relay Base URL",
+			"step3": "Enter API Key",
+			"step4": "Configure image models (test / fetch image models / bulk import)",
+			"presetOptional": "Optional presets (fill helpers only, not vendor lock-in):",
+			"emptyHint": "After adding a relay, pick its image models in the create page",
+			"protocol": "Protocol",
+			"testConnection": "Test connection",
+			"fetchModels": "Fetch image models",
+			"bulkImport": "Bulk import models",
+			"bulkHint": "One image model per line: modelId or modelId|Display name",
+			"applyBulk": "Import into list",
+			"probeOk": "Connected",
+			"probeFailed": "Connection failed",
+			"importedModels": "Imported {{count}} image models (editable)",
+			"docsTip": "See your relay docs, e.g."
 		},
 		"users": {
 			"title": "User Management",

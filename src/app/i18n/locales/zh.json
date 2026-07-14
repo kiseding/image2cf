@@ -101,7 +101,7 @@
 		"sections": {
 			"common": "通用设置",
 			"provider": "AI提供商",
-			"relay": "中转站",
+			"relay": "生图中转",
 			"users": "用户管理"
 		},
 		"provider": {
@@ -129,7 +129,7 @@
 		"relay": {
 			"title": "中转站",
 			"description": "配置自定义 API 中转站与密钥",
-			"hint": "支持 OpenAI / Google 兼容中转（如 APIKEY.FUN）。可配置多个。",
+			"hint": "生图中转：协议 + Base URL + API Key + 生图模型",
 			"add": "添加中转站",
 			"edit": "编辑中转站",
 			"empty": "暂无中转站，点击上方添加",
@@ -152,8 +152,26 @@
 			"preset": "快速预设",
 			"presetPlaceholder": "选择预设或自定义",
 			"custom": "自定义",
-			"openaiBaseHint": "OpenAI 兼容请填到 /v1，例如 https://api.apikey.fun/v1",
-			"googleBaseHint": "Google 兼容填主机根地址，例如 https://api.apikey.fun（不要加 /v1）"
+			"openaiBaseHint": "OpenAI 兼容请填到 /v1，例如 https://api.xxx.com/v1",
+			"googleBaseHint": "Google 兼容填主机根地址，例如 https://api.xxx.com（不要加 /v1）",
+			"formTitle": "生图中转站",
+			"genericHint": "专注 AI 生图：接入任意 OpenAI / Google 兼容中转的「图片模型」。换站只改 Base URL 和 API Key，再拉取或手填生图模型 ID。",
+			"step1": "选择协议（OpenAI 生图 或 Google 生图）",
+			"step2": "填写中转站 Base URL",
+			"step3": "填写 API Key",
+			"step4": "配置生图模型（测试连接 / 拉取生图模型 / 批量导入）",
+			"presetOptional": "可选快捷预设（仅作填充，不绑定单一厂商）：",
+			"emptyHint": "添加中转站后，在创作页选择对应生图模型即可出图",
+			"protocol": "协议",
+			"testConnection": "测试连接",
+			"fetchModels": "拉取生图模型",
+			"bulkImport": "批量导入模型",
+			"bulkHint": "每行一个生图模型：modelId 或 modelId|显示名",
+			"applyBulk": "导入到模型列表",
+			"probeOk": "连接成功",
+			"probeFailed": "连接失败",
+			"importedModels": "已导入 {{count}} 个生图模型（可再编辑）",
+			"docsTip": "配置说明可参考中转站文档，例如"
 		},
 		"users": {
 			"title": "用户管理",

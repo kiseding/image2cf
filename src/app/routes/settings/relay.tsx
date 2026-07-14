@@ -5,13 +5,18 @@ import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/app/components/ui/select";
 import { Switch } from "@/app/components/ui/switch";
+import { Textarea } from "@/app/components/ui/textarea";
 import { useToast } from "@/app/hooks/useToast";
 import { useRelayService } from "@/app/hooks/useService";
 import { SettingsPageLayout } from "@/app/routes/settings/-components/SettingsPageLayout";
-import { RELAY_PRESETS } from "@/server/ai/provider/relay-presets";
+import {
+	RELAY_PRESETS,
+	RELAY_PROTOCOL_GUIDE,
+	type RelayProtocol,
+} from "@/server/ai/provider/relay-presets";
 import { createFileRoute } from "@tanstack/react-router";
-import { ExternalLink, LucideNetwork, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ExternalLink, Loader2, LucideNetwork, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
 
@@ -28,7 +33,7 @@ type RelayModelForm = {
 
 type RelayForm = {
 	name: string;
-	type: "openai" | "google";
+	type: RelayProtocol;
 	baseURL: string;
 	apiKey: string;
 	enabled: boolean;
@@ -54,21 +59,28 @@ function RelaySettingsPage() {
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [form, setForm] = useState<RelayForm>(emptyForm);
 	const [saving, setSaving] = useState(false);
+	const [probing, setProbing] = useState(false);
+	const [bulkText, setBulkText] = useState("");
+	const [showBulk, setShowBulk] = useState(false);
+
+	const protocolGuide = useMemo(() => RELAY_PROTOCOL_GUIDE[form.type], [form.type]);
 
 	const openCreate = () => {
 		setEditingId(null);
 		setForm(emptyForm);
+		setBulkText("");
+		setShowBulk(false);
 		setDialogOpen(true);
 	};
 
 	const applyPreset = (presetId: string) => {
 		const preset = RELAY_PRESETS.find((p) => p.id === presetId);
 		if (!preset) return;
-		setForm({
+		setForm((prev) => ({
 			name: preset.name,
 			type: preset.type,
 			baseURL: preset.baseURL,
-			apiKey: form.apiKey, // keep key if user already typed
+			apiKey: prev.apiKey,
 			enabled: true,
 			models: preset.models.map((m) => ({
 				id: m.id,
@@ -76,7 +88,7 @@ function RelaySettingsPage() {
 				ability: (m.ability as "t2i" | "i2i") || "i2i",
 				maxInputImages: m.maxInputImages || 1,
 			})),
-		});
+		}));
 	};
 
 	const openEdit = async (id: string) => {
@@ -85,7 +97,7 @@ function RelaySettingsPage() {
 			setEditingId(id);
 			setForm({
 				name: detail.name,
-				type: detail.type,
+				type: detail.type as RelayProtocol,
 				baseURL: detail.baseURL,
 				apiKey: detail.apiKey,
 				enabled: detail.enabled,
@@ -93,6 +105,8 @@ function RelaySettingsPage() {
 					? (detail.models as RelayModelForm[])
 					: emptyForm.models,
 			});
+			setBulkText("");
+			setShowBulk(false);
 			setDialogOpen(true);
 		} catch (e: any) {
 			toast({ title: t("common.error"), description: e.message, variant: "destructive" });
@@ -172,23 +186,99 @@ function RelaySettingsPage() {
 		}));
 	};
 
+	const handleProbe = async (importModels: boolean) => {
+		if (!form.baseURL.trim() || !form.apiKey.trim()) {
+			toast({ title: t("common.error"), description: t("settings.relay.fillRequired"), variant: "destructive" });
+			return;
+		}
+		setProbing(true);
+		try {
+			const result = await relayService.probeRelay({
+				type: form.type,
+				baseURL: form.baseURL,
+				apiKey: form.apiKey,
+			});
+			if (!result.ok) {
+				toast({
+					title: t("settings.relay.probeFailed"),
+					description: result.message,
+					variant: "destructive",
+				});
+				return;
+			}
+			if (importModels && result.models?.length) {
+				// merge by id
+				const existing = new Map(form.models.filter((m) => m.id).map((m) => [m.id, m]));
+				for (const m of result.models) {
+					if (!existing.has(m.id)) {
+						existing.set(m.id, {
+							id: m.id,
+							name: m.name,
+							ability: (m.ability as "t2i" | "i2i") || "t2i",
+							maxInputImages: m.maxInputImages || 1,
+						});
+					}
+				}
+				setForm((p) => ({ ...p, models: Array.from(existing.values()), baseURL: result.baseURL || p.baseURL }));
+				toast({
+					title: t("settings.relay.probeOk"),
+					description: t("settings.relay.importedModels", { count: result.models.length }),
+				});
+			} else {
+				if (result.baseURL) setForm((p) => ({ ...p, baseURL: result.baseURL }));
+				toast({ title: t("settings.relay.probeOk"), description: result.message });
+			}
+		} catch (e: any) {
+			toast({ title: t("settings.relay.probeFailed"), description: e.message, variant: "destructive" });
+		} finally {
+			setProbing(false);
+		}
+	};
+
+	const applyBulkModels = () => {
+		// lines: modelId  or  modelId|Display Name  or  modelId,Display Name
+		const lines = bulkText
+			.split(/\r?\n/)
+			.map((l) => l.trim())
+			.filter(Boolean);
+		if (!lines.length) return;
+		const next: RelayModelForm[] = [];
+		const seen = new Set<string>();
+		for (const line of lines) {
+			const [idPart, namePart] = line.split(/[|,=\t]/).map((s) => s.trim());
+			const id = idPart || "";
+			if (!id || seen.has(id)) continue;
+			seen.add(id);
+			next.push({
+				id,
+				name: namePart || id,
+				ability: /edit|i2i|img2img|kontext|image/i.test(id) ? "i2i" : "t2i",
+				maxInputImages: /edit|i2i|img2img|kontext|image/i.test(id) ? 3 : 1,
+			});
+		}
+		if (!next.length) return;
+		setForm((p) => {
+			const map = new Map(p.models.filter((m) => m.id).map((m) => [m.id, m]));
+			for (const m of next) map.set(m.id, m);
+			return { ...p, models: Array.from(map.values()) };
+		});
+		setShowBulk(false);
+		toast({ title: t("common.success"), description: t("settings.relay.importedModels", { count: next.length }) });
+	};
+
 	return (
 		<SettingsPageLayout>
-			<div className="space-y-4 p-6">
-				<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div className="space-y-1">
-						<p className="text-muted-foreground text-sm">{t("settings.relay.hint")}</p>
-						<p className="text-muted-foreground text-xs">
-							{t("settings.relay.apikeyFunHint")}{" "}
-							<a
-								href="https://apikey.fun/docs#ApiScripts"
-								target="_blank"
-								rel="noreferrer"
-								className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"
-							>
-								APIKEY.FUN Docs <ExternalLink className="h-3 w-3" />
-							</a>
-						</p>
+			<div className="space-y-5 p-6">
+				<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+					<div className="space-y-2">
+						<p className="font-medium text-sm">{t("settings.relay.formTitle")}</p>
+						<p className="max-w-2xl text-muted-foreground text-sm">{t("settings.relay.genericHint")}</p>
+						<ol className="list-decimal space-y-1 pl-5 text-muted-foreground text-xs">
+							<li>{t("settings.relay.step1")}</li>
+							<li>{t("settings.relay.step2")}</li>
+							<li>{t("settings.relay.step3")}</li>
+							<li>{t("settings.relay.step4")}</li>
+						</ol>
 					</div>
 					<Button onClick={openCreate} size="sm">
 						<Plus className="mr-1 h-4 w-4" />
@@ -196,29 +286,26 @@ function RelaySettingsPage() {
 					</Button>
 				</div>
 
-				{/* Quick presets */}
-				<div className="grid gap-2 sm:grid-cols-3">
-					{RELAY_PRESETS.map((preset) => (
-						<button
-							key={preset.id}
-							type="button"
-							className="rounded-xl border bg-card/50 p-3 text-left transition hover:border-primary/50 hover:bg-accent/40"
-							onClick={() => {
-								setEditingId(null);
-								applyPreset(preset.id);
-								setDialogOpen(true);
-							}}
-						>
-							<div className="mb-1 flex items-center gap-2">
-								<span className="font-medium text-sm">{preset.name}</span>
-								<Badge variant="outline" className="text-[10px]">
-									{preset.type}
-								</Badge>
-							</div>
-							<p className="line-clamp-2 text-muted-foreground text-xs">{preset.description}</p>
-							<p className="mt-1 truncate text-[10px] text-muted-foreground/80">{preset.baseURL}</p>
-						</button>
-					))}
+				{/* Optional presets as shortcuts, not required */}
+				<div>
+					<p className="mb-2 text-muted-foreground text-xs">{t("settings.relay.presetOptional")}</p>
+					<div className="flex flex-wrap gap-2">
+						{RELAY_PRESETS.map((preset) => (
+							<button
+								key={preset.id}
+								type="button"
+								className="rounded-lg border bg-card/50 px-3 py-2 text-left text-xs transition hover:border-primary/50 hover:bg-accent/40"
+								onClick={() => {
+									setEditingId(null);
+									applyPreset(preset.id);
+									setDialogOpen(true);
+								}}
+							>
+								<span className="font-medium">{preset.name}</span>
+								<span className="ml-2 text-muted-foreground">{preset.type}</span>
+							</button>
+						))}
+					</div>
 				</div>
 
 				{isLoading ? (
@@ -227,6 +314,7 @@ function RelaySettingsPage() {
 					<div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-muted-foreground">
 						<LucideNetwork className="mb-3 h-10 w-10 opacity-40" />
 						<p>{t("settings.relay.empty")}</p>
+						<p className="mt-1 text-xs">{t("settings.relay.emptyHint")}</p>
 					</div>
 				) : (
 					<div className="space-y-3">
@@ -238,12 +326,15 @@ function RelaySettingsPage() {
 								<div className="min-w-0 space-y-1">
 									<div className="flex flex-wrap items-center gap-2">
 										<span className="font-medium">{relay.name}</span>
-										<Badge variant="secondary">{relay.type}</Badge>
+										<Badge variant="secondary">
+											{relay.type === "openai" ? "OpenAI" : "Google"}
+										</Badge>
 										{!relay.enabled && <Badge variant="outline">{t("settings.provider.disabled")}</Badge>}
 									</div>
-									<p className="truncate text-muted-foreground text-xs">{relay.baseURL}</p>
+									<p className="truncate font-mono text-muted-foreground text-xs">{relay.baseURL}</p>
 									<p className="text-muted-foreground text-xs">
-										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })} · API Key: {relay.apiKey}
+										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })} · API Key:{" "}
+										{relay.apiKey}
 									</p>
 								</div>
 								<div className="flex items-center gap-2">
@@ -267,32 +358,24 @@ function RelaySettingsPage() {
 						<DialogTitle>{editingId ? t("settings.relay.edit") : t("settings.relay.add")}</DialogTitle>
 					</DialogHeader>
 					<div className="space-y-4">
-						{!editingId && (
-							<div className="space-y-2">
-								<Label>{t("settings.relay.preset")}</Label>
-								<Select
-									onValueChange={(v) => {
-										if (v === "custom") {
-											setForm(emptyForm);
-											return;
-										}
-										applyPreset(v);
-									}}
-								>
-									<SelectTrigger>
-										<SelectValue placeholder={t("settings.relay.presetPlaceholder")} />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="custom">{t("settings.relay.custom")}</SelectItem>
-										{RELAY_PRESETS.map((p) => (
-											<SelectItem key={p.id} value={p.id}>
-												{p.name}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-						)}
+						{/* Core: protocol */}
+						<div className="space-y-2">
+							<Label>{t("settings.relay.protocol")}</Label>
+							<Select
+								value={form.type}
+								onValueChange={(v) => setForm((p) => ({ ...p, type: v as RelayProtocol }))}
+							>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="openai">{RELAY_PROTOCOL_GUIDE.openai.label}</SelectItem>
+									<SelectItem value="google">{RELAY_PROTOCOL_GUIDE.google.label}</SelectItem>
+								</SelectContent>
+							</Select>
+							<p className="text-muted-foreground text-xs">{protocolGuide.authHint}</p>
+						</div>
+
 						<div className="space-y-2">
 							<Label>{t("settings.relay.name")}</Label>
 							<Input
@@ -301,36 +384,17 @@ function RelaySettingsPage() {
 								placeholder={t("settings.relay.namePlaceholder")}
 							/>
 						</div>
-						<div className="space-y-2">
-							<Label>{t("settings.relay.type")}</Label>
-							<Select
-								value={form.type}
-								onValueChange={(v) => setForm((p) => ({ ...p, type: v as "openai" | "google" }))}
-							>
-								<SelectTrigger>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									<SelectItem value="openai">OpenAI Compatible</SelectItem>
-									<SelectItem value="google">Google Compatible</SelectItem>
-								</SelectContent>
-							</Select>
-						</div>
+
 						<div className="space-y-2">
 							<Label>{t("settings.relay.baseURL")}</Label>
 							<Input
 								value={form.baseURL}
 								onChange={(e) => setForm((p) => ({ ...p, baseURL: e.target.value }))}
-								placeholder={
-									form.type === "google" ? "https://api.apikey.fun" : "https://api.apikey.fun/v1"
-								}
+								placeholder={protocolGuide.basePlaceholder}
 							/>
-							<p className="text-muted-foreground text-xs">
-								{form.type === "openai"
-									? t("settings.relay.openaiBaseHint")
-									: t("settings.relay.googleBaseHint")}
-							</p>
+							<p className="text-muted-foreground text-xs">{protocolGuide.baseHint}</p>
 						</div>
+
 						<div className="space-y-2">
 							<Label>API Key</Label>
 							<Input
@@ -340,6 +404,50 @@ function RelaySettingsPage() {
 								placeholder="sk-..."
 							/>
 						</div>
+
+						{/* Test / import models */}
+						<div className="flex flex-wrap gap-2">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={probing}
+								onClick={() => handleProbe(false)}
+							>
+								{probing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
+								{t("settings.relay.testConnection")}
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								disabled={probing}
+								onClick={() => handleProbe(true)}
+							>
+								{probing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+								{t("settings.relay.fetchModels")}
+							</Button>
+							<Button type="button" variant="ghost" size="sm" onClick={() => setShowBulk((v) => !v)}>
+								{t("settings.relay.bulkImport")}
+							</Button>
+						</div>
+
+						{showBulk && (
+							<div className="space-y-2 rounded-lg border p-3">
+								<Label className="text-xs">{t("settings.relay.bulkHint")}</Label>
+								<Textarea
+									value={bulkText}
+									onChange={(e) => setBulkText(e.target.value)}
+									placeholder={"gpt-image-1|GPT Image 1\ndall-e-3\nflux-kontext-pro"}
+									rows={5}
+									className="font-mono text-xs"
+								/>
+								<Button type="button" size="sm" onClick={applyBulkModels}>
+									{t("settings.relay.applyBulk")}
+								</Button>
+							</div>
+						)}
+
 						<div className="flex items-center justify-between">
 							<Label>{t("settings.provider.enabled")}</Label>
 							<Switch checked={form.enabled} onCheckedChange={(v) => setForm((p) => ({ ...p, enabled: v }))} />
@@ -394,8 +502,8 @@ function RelaySettingsPage() {
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
-													<SelectItem value="t2i">T2I</SelectItem>
-													<SelectItem value="i2i">I2I</SelectItem>
+													<SelectItem value="t2i">T2I · 文生图</SelectItem>
+													<SelectItem value="i2i">I2I · 图生图</SelectItem>
 												</SelectContent>
 											</Select>
 										</div>
@@ -430,6 +538,25 @@ function RelaySettingsPage() {
 								</div>
 							))}
 						</div>
+
+						{!editingId && RELAY_PRESETS.some((p) => p.docsUrl) && (
+							<p className="text-muted-foreground text-[11px]">
+								{t("settings.relay.docsTip")}{" "}
+								{RELAY_PRESETS.filter((p) => p.docsUrl)
+									.slice(0, 1)
+									.map((p) => (
+										<a
+											key={p.id}
+											href={p.docsUrl}
+											target="_blank"
+											rel="noreferrer"
+											className="inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline"
+										>
+											{p.name} <ExternalLink className="h-3 w-3" />
+										</a>
+									))}
+							</p>
+						)}
 					</div>
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setDialogOpen(false)}>

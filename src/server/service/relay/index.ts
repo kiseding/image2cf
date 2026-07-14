@@ -1,3 +1,8 @@
+import {
+	guessImageModelMeta,
+	isLikelyImageModel,
+	normalizeRelayBaseURL,
+} from "@/server/ai/provider/relay-presets";
 import { userRelays } from "@/server/db/schemas";
 import { ServiceException } from "@/server/lib/exception";
 import { and, desc, eq } from "drizzle-orm";
@@ -45,6 +50,14 @@ export const GetRelayByIdSchema = z.object({
 });
 export type GetRelayById = z.infer<typeof GetRelayByIdSchema>;
 
+/** Probe a relay without saving — list models / connectivity */
+export const ProbeRelaySchema = z.object({
+	type: z.enum(["openai", "google"]).default("openai"),
+	baseURL: z.string().url(),
+	apiKey: z.string().min(1),
+});
+export type ProbeRelay = z.infer<typeof ProbeRelaySchema>;
+
 const listRelays = async (ctx: RequestContext) => {
 	const { db } = getContext();
 	const rows = await db.query.userRelays.findMany({
@@ -87,16 +100,6 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 	};
 };
 
-function normalizeBaseURL(type: "openai" | "google", baseURL: string) {
-	let u = baseURL.trim().replace(/\/+$/, "");
-	if (type === "openai") {
-		if (!/\/v\d+[a-z]*$/i.test(u)) u = `${u}/v1`;
-	} else {
-		u = u.replace(/\/v1beta$/i, "").replace(/\/v1$/i, "");
-	}
-	return u;
-}
-
 const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 	const { db } = getContext();
 	const [row] = await db
@@ -105,7 +108,7 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			userId: ctx.userId,
 			name: req.name,
 			type: req.type,
-			baseURL: normalizeBaseURL(req.type, req.baseURL),
+			baseURL: normalizeRelayBaseURL(req.type, req.baseURL),
 			apiKey: req.apiKey.trim(),
 			models: req.models,
 			enabled: req.enabled,
@@ -123,15 +126,13 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 		throw new ServiceException("not_found", "Relay not found");
 	}
 
-	const nextType = req.type ?? existing.type;
+	const nextType = (req.type ?? existing.type) as "openai" | "google";
 	await db
 		.update(userRelays)
 		.set({
 			...(req.name !== undefined ? { name: req.name } : {}),
 			...(req.type !== undefined ? { type: req.type } : {}),
-			...(req.baseURL !== undefined
-				? { baseURL: normalizeBaseURL(nextType as "openai" | "google", req.baseURL) }
-				: {}),
+			...(req.baseURL !== undefined ? { baseURL: normalizeRelayBaseURL(nextType, req.baseURL) } : {}),
 			...(req.apiKey !== undefined ? { apiKey: req.apiKey.trim() } : {}),
 			...(req.models !== undefined ? { models: req.models } : {}),
 			...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
@@ -140,6 +141,126 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 		.where(eq(userRelays.id, req.id));
 
 	return true;
+};
+
+/**
+ * Test connectivity and optionally pull model list from the relay.
+ * Generic: works for any OpenAI-compatible /models or Google list endpoint.
+ */
+const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
+	const type = req.type;
+	const baseURL = normalizeRelayBaseURL(type, req.baseURL);
+	const apiKey = req.apiKey.trim();
+
+	if (type === "openai") {
+		const url = `${baseURL.replace(/\/+$/, "")}/models`;
+		const resp = await fetch(url, {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"Content-Type": "application/json",
+			},
+		});
+		const text = await resp.text();
+		let json: any = null;
+		try {
+			json = JSON.parse(text);
+		} catch {
+			/* ignore */
+		}
+		if (!resp.ok) {
+			return {
+				ok: false as const,
+				status: resp.status,
+				message: json?.error?.message || json?.message || text.slice(0, 200) || `HTTP ${resp.status}`,
+				baseURL,
+				models: [] as RelayModel[],
+			};
+		}
+		const rawList: any[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+		const models: RelayModel[] = rawList
+			.map((m) => {
+				const id = String(m.id || m.name || "").trim();
+				if (!id) return null;
+				const name = String(m.id || m.name || id);
+				// Image product: only keep image-generation models when auto-fetching
+				if (!isLikelyImageModel(id, name)) return null;
+				const meta = guessImageModelMeta(id, name);
+				return { id, name, ...meta } as RelayModel;
+			})
+			.filter(Boolean) as RelayModel[];
+
+		return {
+			ok: true as const,
+			status: resp.status,
+			message: models.length
+				? `OK · ${models.length} image models`
+				: "OK · connected (no image models auto-detected; add Model IDs manually)",
+			baseURL,
+			models,
+		};
+	}
+
+	// Google-compatible: try listing models
+	const root = baseURL.replace(/\/+$/, "");
+	const candidates = [
+		`${root}/v1beta/models`,
+		`${root}/v1/models`,
+	];
+	let lastErr = "unreachable";
+	for (const url of candidates) {
+		try {
+			const resp = await fetch(url, {
+				method: "GET",
+				headers: {
+					"x-goog-api-key": apiKey,
+					Authorization: `Bearer ${apiKey}`,
+					"Content-Type": "application/json",
+				},
+			});
+			const text = await resp.text();
+			let json: any = null;
+			try {
+				json = JSON.parse(text);
+			} catch {
+				/* ignore */
+			}
+			if (!resp.ok) {
+				lastErr = json?.error?.message || json?.message || `HTTP ${resp.status}`;
+				continue;
+			}
+			const rawList: any[] = Array.isArray(json?.models) ? json.models : [];
+			const models: RelayModel[] = rawList
+				.map((m) => {
+					const full = String(m.name || m.id || "");
+					const id = full.replace(/^models\//, "").trim();
+					if (!id) return null;
+					const name = id;
+					if (!isLikelyImageModel(id, name)) return null;
+					const meta = guessImageModelMeta(id, name);
+					return { id, name, ...meta } as RelayModel;
+				})
+				.filter(Boolean) as RelayModel[];
+			return {
+				ok: true as const,
+				status: resp.status,
+				message: models.length
+					? `OK · ${models.length} image models`
+					: "OK · connected (no image models auto-detected; add Model IDs manually)",
+				baseURL: root,
+				models,
+			};
+		} catch (e: any) {
+			lastErr = e?.message || String(e);
+		}
+	}
+	return {
+		ok: false as const,
+		status: 0,
+		message: lastErr,
+		baseURL: root,
+		models: [] as RelayModel[],
+	};
 };
 
 const deleteRelay = async (req: DeleteRelay, ctx: RequestContext) => {
@@ -218,6 +339,7 @@ class RelayService {
 	createRelay = createRelay;
 	updateRelay = updateRelay;
 	deleteRelay = deleteRelay;
+	probeRelay = probeRelay;
 	getEnabledRelaysAsProviders = getEnabledRelaysAsProviders;
 	resolveRelayForGeneration = resolveRelayForGeneration;
 }

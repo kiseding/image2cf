@@ -2,6 +2,7 @@ import {
 	CreateRelaySchema,
 	DeleteRelaySchema,
 	GetRelayByIdSchema,
+	ProbeRelaySchema,
 	UpdateRelaySchema,
 	relayService,
 } from "@/server/service/relay";
@@ -35,6 +36,11 @@ const app = new Hono<Env>()
 		const user = c.var.user!;
 		const req = c.req.valid("json");
 		return c.json(ok(await relayService.deleteRelay(req, { userId: user.id })));
+	})
+	.post("/probeRelay", zValidator("json", ProbeRelaySchema), async (c) => {
+		const user = c.var.user!;
+		const req = c.req.valid("json");
+		return c.json(ok(await relayService.probeRelay(req, { userId: user.id })));
 	})
 	.post("/getEnabledRelaysAsProviders", async (c) => {
 		const user = c.var.user!;
