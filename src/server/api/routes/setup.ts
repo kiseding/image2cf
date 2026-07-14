@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { usernameToEmail } from "@/server/lib/auth";
 import { readWorkerEnv } from "@/server/lib/worker-env";
 import { type Env, ok } from "../util";
 
@@ -15,14 +14,6 @@ const app = new Hono<Env>()
 		let userCount = 0;
 		let admin: any = null;
 		let error: string | null = null;
-		let bindingKeys: string[] = [];
-
-		try {
-			// Enumerated keys (secrets may not appear here — that's normal)
-			bindingKeys = Object.keys(c.env || {});
-		} catch {
-			bindingKeys = [];
-		}
 
 		try {
 			if (d1) {
@@ -30,13 +21,12 @@ const app = new Hono<Env>()
 				userCount = Number(cnt?.c || 0);
 				admin = await d1
 					.prepare(
-						`SELECT id, email, username, role,
+						`SELECT id, username, role,
               (SELECT COUNT(*) FROM account a WHERE a.user_id = user.id AND a.provider_id = 'credential' AND a.password IS NOT NULL) as has_password
              FROM user
-             WHERE email = ? OR username = 'admin' OR role = 'admin'
+             WHERE username = 'admin' OR role = 'admin'
              LIMIT 1`,
 					)
-					.bind(usernameToEmail("admin"))
 					.first();
 			}
 		} catch (err: any) {
@@ -46,23 +36,19 @@ const app = new Hono<Env>()
 		return c.json(
 			ok({
 				hasAdminPasswordEnv: hasPassword,
-				// true if direct access works even when not enumerable
-				adminPasswordReadable: hasPassword,
 				userCount,
 				admin: admin
 					? {
 							id: admin.id,
-							email: admin.email,
-							username: admin.username,
+							username: admin.username || "admin",
 							role: admin.role,
 							hasPassword: Number(admin.has_password) > 0,
 						}
 					: null,
 				loginHint: {
 					username: "admin",
-					passwordSource: "Worker Secret ADMIN_PASSWORD",
+					passwordSource: "GitHub Secret ADMIN_PASSWORD",
 				},
-				bindingKeysSample: bindingKeys.slice(0, 20),
 				error,
 			}),
 		);

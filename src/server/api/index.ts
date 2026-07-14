@@ -12,6 +12,7 @@ import adminRouter from "./routes/admin";
 import aiRouter from "./routes/ai";
 import chatsRouter from "./routes/chat";
 import fileRouter from "./routes/file";
+import loginRouter from "./routes/login";
 import relayRouter from "./routes/relay";
 import setupRouter from "./routes/setup";
 import userRouter from "./routes/settings";
@@ -135,6 +136,7 @@ app.onError((err, c) => {
 const route = app
 	.basePath("/api")
 	.route("/", setupRouter)
+	.route("/", loginRouter)
 	.route("/", chatsRouter)
 	.route("/", userRouter)
 	.route("/", aiRouter)

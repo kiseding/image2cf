@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
 import { useAuth } from "@/app/hooks/useAuth";
-import { authClient, usernameToLoginEmail } from "@/app/lib/auth-client";
+import { loginWithUsername } from "@/app/lib/auth-client";
 import { useUIStore } from "@/app/stores";
 import { AlertCircle, Eye, EyeOff, Lock, User } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -53,21 +53,18 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 		setError(null);
 
 		try {
-			// UI: username. Backend: better-auth email/password with synthetic email
-			const email = usernameToLoginEmail(formData.username);
-			const response = await authClient.signIn.email({
-				email,
-				password: formData.password,
-			});
+			const response = await loginWithUsername(formData.username, formData.password);
 
 			if (response.error) {
 				const errorCode = response.error.code;
 				switch (errorCode) {
+					case "unauthorized":
 					case "INVALID_EMAIL":
 					case "INVALID_EMAIL_OR_PASSWORD":
 					case "INVALID_USERNAME_OR_PASSWORD":
 						setError(t("auth.invalidUsernameOrPassword"));
 						break;
+					case "forbidden":
 					case "USER_BANNED":
 					case "FORBIDDEN":
 						setError(t("auth.userBanned"));
@@ -80,9 +77,9 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 			}
 
 			window.location.reload();
-		} catch (error: any) {
-			console.error("Authentication error:", error);
-			setError(error.message || t("auth.networkError"));
+		} catch (err: any) {
+			console.error("Authentication error:", err);
+			setError(err.message || t("auth.networkError"));
 		} finally {
 			setIsLoading(false);
 		}
