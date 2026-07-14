@@ -2,79 +2,6 @@ import type { RelayModel } from "@/server/service/relay";
 
 export type RelayProtocol = "openai" | "google";
 
-export type RelayPreset = {
-	id: string;
-	/** Brand / station name */
-	name: string;
-	description: string;
-	type: RelayProtocol;
-	/** Full API base for this protocol */
-	baseURL: string;
-	apiKeyPlaceholder?: string;
-	docsUrl?: string;
-	/** Optional starter models (user can edit/replace anytime) */
-	models: RelayModel[];
-};
-
-/**
- * Optional convenience presets only.
- * Core config is always: protocol + baseURL + apiKey + models.
- * Swap stations by changing baseURL / key; no code change required.
- */
-export const RELAY_PRESETS: RelayPreset[] = [
-	{
-		id: "apikey-fun-openai",
-		name: "APIKEY.FUN",
-		description: "OpenAI 兼容 · CF 企业级",
-		type: "openai",
-		baseURL: "https://api.apikey.fun/v1",
-		apiKeyPlaceholder: "sk-...",
-		docsUrl: "https://apikey.fun/docs#ApiScripts",
-		models: [
-			{ id: "gpt-image-1", name: "GPT Image 1", ability: "i2i", maxInputImages: 3 },
-			{ id: "gpt-image-1.5", name: "GPT Image 1.5", ability: "i2i", maxInputImages: 3 },
-			{ id: "dall-e-3", name: "DALL·E 3", ability: "t2i", maxInputImages: 1 },
-		],
-	},
-	{
-		id: "apikey-fun-slb",
-		name: "APIKEY.FUN 专线",
-		description: "OpenAI 兼容 · 低延迟",
-		type: "openai",
-		baseURL: "https://slb.apikey.fun/v1",
-		apiKeyPlaceholder: "sk-...",
-		docsUrl: "https://apikey.fun/docs#ApiScripts",
-		models: [
-			{ id: "gpt-image-1", name: "GPT Image 1", ability: "i2i", maxInputImages: 3 },
-			{ id: "dall-e-3", name: "DALL·E 3", ability: "t2i", maxInputImages: 1 },
-		],
-	},
-	{
-		id: "apikey-fun-google",
-		name: "APIKEY.FUN Google",
-		description: "Google GenAI 兼容",
-		type: "google",
-		baseURL: "https://api.apikey.fun",
-		apiKeyPlaceholder: "sk-...",
-		docsUrl: "https://apikey.fun/docs#ApiScripts",
-		models: [
-			{
-				id: "gemini-2.0-flash-preview-image-generation",
-				name: "Gemini 2.0 Flash Image",
-				ability: "i2i",
-				maxInputImages: 3,
-			},
-			{
-				id: "gemini-2.5-flash-image-preview",
-				name: "Gemini 2.5 Flash Image",
-				ability: "i2i",
-				maxInputImages: 3,
-			},
-			{ id: "imagen-4.0-generate-001", name: "Imagen 4.0", ability: "t2i", maxInputImages: 1 },
-		],
-	},
-];
-
 /** Protocol field guide shown in UI */
 export const RELAY_PROTOCOL_GUIDE: Record<
 	RelayProtocol,
@@ -118,7 +45,6 @@ const IMAGE_EDIT_RE =
 /** Whether a remote model id looks like an image-generation model (not chat/LLM). */
 export function isLikelyImageModel(id: string, name?: string): boolean {
 	const s = `${id} ${name || ""}`;
-	// Explicit chat/text models → skip when auto-fetching
 	if (
 		/^(gpt-4|gpt-3|o1|o3|o4|claude|deepseek|qwen(?!-image)|llama|mistral|gemini-.*-pro$|gemini-.*-flash$|command-r|chat)/i.test(
 			id,

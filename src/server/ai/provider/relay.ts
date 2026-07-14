@@ -11,7 +11,7 @@ export interface RelayConfig {
 }
 
 /**
- * Generate images via a user-defined relay station (e.g. apikey.fun).
+ * Generate images via a user-defined relay station.
  * Reuses OpenAI / Google provider implementations with custom baseURL + apiKey.
  */
 export async function generateViaRelay(

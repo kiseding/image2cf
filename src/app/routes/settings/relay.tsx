@@ -9,13 +9,9 @@ import { Textarea } from "@/app/components/ui/textarea";
 import { useToast } from "@/app/hooks/useToast";
 import { useRelayService } from "@/app/hooks/useService";
 import { SettingsPageLayout } from "@/app/routes/settings/-components/SettingsPageLayout";
-import {
-	RELAY_PRESETS,
-	RELAY_PROTOCOL_GUIDE,
-	type RelayProtocol,
-} from "@/server/ai/provider/relay-presets";
+import { RELAY_PROTOCOL_GUIDE, type RelayProtocol } from "@/server/ai/provider/relay-presets";
 import { createFileRoute } from "@tanstack/react-router";
-import { ExternalLink, Loader2, LucideNetwork, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, LucideNetwork, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
@@ -71,24 +67,6 @@ function RelaySettingsPage() {
 		setBulkText("");
 		setShowBulk(false);
 		setDialogOpen(true);
-	};
-
-	const applyPreset = (presetId: string) => {
-		const preset = RELAY_PRESETS.find((p) => p.id === presetId);
-		if (!preset) return;
-		setForm((prev) => ({
-			name: preset.name,
-			type: preset.type,
-			baseURL: preset.baseURL,
-			apiKey: prev.apiKey,
-			enabled: true,
-			models: preset.models.map((m) => ({
-				id: m.id,
-				name: m.name,
-				ability: (m.ability as "t2i" | "i2i") || "i2i",
-				maxInputImages: m.maxInputImages || 1,
-			})),
-		}));
 	};
 
 	const openEdit = async (id: string) => {
@@ -207,7 +185,6 @@ function RelaySettingsPage() {
 				return;
 			}
 			if (importModels && result.models?.length) {
-				// merge by id
 				const existing = new Map(form.models.filter((m) => m.id).map((m) => [m.id, m]));
 				for (const m of result.models) {
 					if (!existing.has(m.id)) {
@@ -219,7 +196,11 @@ function RelaySettingsPage() {
 						});
 					}
 				}
-				setForm((p) => ({ ...p, models: Array.from(existing.values()), baseURL: result.baseURL || p.baseURL }));
+				setForm((p) => ({
+					...p,
+					models: Array.from(existing.values()),
+					baseURL: result.baseURL || p.baseURL,
+				}));
 				toast({
 					title: t("settings.relay.probeOk"),
 					description: t("settings.relay.importedModels", { count: result.models.length }),
@@ -236,7 +217,6 @@ function RelaySettingsPage() {
 	};
 
 	const applyBulkModels = () => {
-		// lines: modelId  or  modelId|Display Name  or  modelId,Display Name
 		const lines = bulkText
 			.split(/\r?\n/)
 			.map((l) => l.trim())
@@ -286,28 +266,6 @@ function RelaySettingsPage() {
 					</Button>
 				</div>
 
-				{/* Optional presets as shortcuts, not required */}
-				<div>
-					<p className="mb-2 text-muted-foreground text-xs">{t("settings.relay.presetOptional")}</p>
-					<div className="flex flex-wrap gap-2">
-						{RELAY_PRESETS.map((preset) => (
-							<button
-								key={preset.id}
-								type="button"
-								className="rounded-lg border bg-card/50 px-3 py-2 text-left text-xs transition hover:border-primary/50 hover:bg-accent/40"
-								onClick={() => {
-									setEditingId(null);
-									applyPreset(preset.id);
-									setDialogOpen(true);
-								}}
-							>
-								<span className="font-medium">{preset.name}</span>
-								<span className="ml-2 text-muted-foreground">{preset.type}</span>
-							</button>
-						))}
-					</div>
-				</div>
-
 				{isLoading ? (
 					<div className="text-muted-foreground text-sm">{t("common.loading")}</div>
 				) : !relays?.length ? (
@@ -326,15 +284,12 @@ function RelaySettingsPage() {
 								<div className="min-w-0 space-y-1">
 									<div className="flex flex-wrap items-center gap-2">
 										<span className="font-medium">{relay.name}</span>
-										<Badge variant="secondary">
-											{relay.type === "openai" ? "OpenAI" : "Google"}
-										</Badge>
+										<Badge variant="secondary">{relay.type === "openai" ? "OpenAI" : "Google"}</Badge>
 										{!relay.enabled && <Badge variant="outline">{t("settings.provider.disabled")}</Badge>}
 									</div>
 									<p className="truncate font-mono text-muted-foreground text-xs">{relay.baseURL}</p>
 									<p className="text-muted-foreground text-xs">
-										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })} · API Key:{" "}
-										{relay.apiKey}
+										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })} · API Key: {relay.apiKey}
 									</p>
 								</div>
 								<div className="flex items-center gap-2">
@@ -358,7 +313,6 @@ function RelaySettingsPage() {
 						<DialogTitle>{editingId ? t("settings.relay.edit") : t("settings.relay.add")}</DialogTitle>
 					</DialogHeader>
 					<div className="space-y-4">
-						{/* Core: protocol */}
 						<div className="space-y-2">
 							<Label>{t("settings.relay.protocol")}</Label>
 							<Select
@@ -405,25 +359,12 @@ function RelaySettingsPage() {
 							/>
 						</div>
 
-						{/* Test / import models */}
 						<div className="flex flex-wrap gap-2">
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								disabled={probing}
-								onClick={() => handleProbe(false)}
-							>
+							<Button type="button" variant="outline" size="sm" disabled={probing} onClick={() => handleProbe(false)}>
 								{probing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}
 								{t("settings.relay.testConnection")}
 							</Button>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								disabled={probing}
-								onClick={() => handleProbe(true)}
-							>
+							<Button type="button" variant="outline" size="sm" disabled={probing} onClick={() => handleProbe(true)}>
 								{probing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
 								{t("settings.relay.fetchModels")}
 							</Button>
@@ -538,25 +479,6 @@ function RelaySettingsPage() {
 								</div>
 							))}
 						</div>
-
-						{!editingId && RELAY_PRESETS.some((p) => p.docsUrl) && (
-							<p className="text-muted-foreground text-[11px]">
-								{t("settings.relay.docsTip")}{" "}
-								{RELAY_PRESETS.filter((p) => p.docsUrl)
-									.slice(0, 1)
-									.map((p) => (
-										<a
-											key={p.id}
-											href={p.docsUrl}
-											target="_blank"
-											rel="noreferrer"
-											className="inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline"
-										>
-											{p.name} <ExternalLink className="h-3 w-3" />
-										</a>
-									))}
-							</p>
-						)}
 					</div>
 					<DialogFooter>
 						<Button variant="outline" onClick={() => setDialogOpen(false)}>
