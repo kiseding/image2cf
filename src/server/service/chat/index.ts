@@ -52,15 +52,43 @@ export const CreateChatSchema = createInsertSchema(chats)
 		images: z.array(z.string()).optional(),
 	});
 export type CreateChat = z.infer<typeof CreateChatSchema>;
+/** Next sequential title: 新创作 1, 新创作 2, ... (also accepts "New Chat N") */
+async function nextChatTitle(userId: string, preferred?: string) {
+	const { db } = getContext();
+	const existing = await db.query.chats.findMany({
+		where: and(eq(chats.userId, userId), eq(chats.deleted, false)),
+		columns: { title: true },
+	});
+	const re = /^(?:新创作|New Chat|新对话)\s*(\d+)\s*$/i;
+	let max = 0;
+	for (const c of existing) {
+		const m = String(c.title || "").trim().match(re);
+		if (m?.[1]) max = Math.max(max, Number(m[1]) || 0);
+	}
+	const n = max + 1;
+	const base = preferred?.trim();
+	// If client sent default unnumbered title, replace with numbered
+	if (!base || /^(?:新创作|New Chat|新对话)$/i.test(base)) {
+		return `新创作 ${n}`;
+	}
+	// If already numbered default, keep preferred only if unique; else renumber
+	if (re.test(base) && existing.some((c) => c.title === base)) {
+		return `新创作 ${n}`;
+	}
+	return base;
+}
+
 const createChat = async (req: CreateChat, ctx: RequestContext) => {
 	const { db } = getContext();
 	const { userId } = ctx;
+
+	const title = await nextChatTitle(userId, req.title);
 
 	const [chat] = await db
 		.insert(chats)
 		.values({
 			userId,
-			title: req.title,
+			title,
 			provider: req.provider,
 			model: req.model,
 		})

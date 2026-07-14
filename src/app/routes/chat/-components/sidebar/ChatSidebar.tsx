@@ -1,12 +1,6 @@
 import { LoginButton } from "@/app/components/login/LoginButton";
 import { UserMenu } from "@/app/components/navigation/UserMenu";
 import { Button } from "@/app/components/ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/app/components/ui/sheet";
 import { useAuth } from "@/app/hooks/useAuth";
@@ -14,7 +8,7 @@ import { cn } from "@/app/lib/utils";
 import { mode } from "@/server/lib/env";
 import type { chatService } from "@/server/service/chat";
 import { useNavigate } from "@tanstack/react-router";
-import { MoreVertical, Palette, Plus, Settings, Trash2 } from "lucide-react";
+import { Palette, Plus, Settings, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSidebar } from "../../-hooks/useChatSidebar";
@@ -142,12 +136,11 @@ export function ChatSidebar({
 									<div
 										key={chat.id}
 										className={cn(
-											"group relative flex w-full cursor-pointer items-center gap-3 rounded-lg p-3 text-left transition-all duration-200 hover:bg-accent/80",
+											"group relative flex w-full cursor-pointer items-center gap-2 rounded-lg p-3 text-left transition-all duration-200 hover:bg-accent/80",
 											currentChatId === chat.id && "border border-accent-foreground/20 bg-accent shadow-sm",
 										)}
 										onClick={() => {
 											onSwitchChat(chat.id);
-											// Only close sidebar on mobile
 											if (isMobile) {
 												closeSidebar();
 											}
@@ -157,41 +150,30 @@ export function ChatSidebar({
 											if (e.key === "Enter" || e.key === " ") {
 												e.preventDefault();
 												onSwitchChat(chat.id);
-												// Only close sidebar on mobile
 												if (isMobile) {
 													closeSidebar();
 												}
 											}
 										}}
 									>
-										<Palette fill="none" />
-										<div className="flex-1 overflow-hidden">
+										<div className="min-w-0 flex-1 overflow-hidden">
 											<div className="truncate font-medium text-sm leading-5">{chat.title}</div>
-											<div className="mt-0.5 text-muted-foreground text-xs">{formatDate(new Date(chat.updatedAt))}</div>
+											<div className="mt-0.5 text-muted-foreground text-xs">
+												{formatDate(new Date(chat.updatedAt))}
+											</div>
 										</div>
-										<DropdownMenu>
-											<DropdownMenuTrigger asChild>
-												<Button
-													variant="ghost"
-													size="icon"
-													className="h-7 w-7 opacity-0 transition-all duration-200 hover:bg-muted/60 group-hover:opacity-100"
-												>
-													<MoreVertical className="h-3.5 w-3.5" />
-												</Button>
-											</DropdownMenuTrigger>
-											<DropdownMenuContent align="end" className="w-32">
-												<DropdownMenuItem
-													onClick={(e) => {
-														e.stopPropagation();
-														onDeleteChat(chat.id);
-													}}
-													className="text-red-600 focus:text-red-600"
-												>
-													<Trash2 className="mr-2 h-4 w-4" />
-													{t("common.delete")}
-												</DropdownMenuItem>
-											</DropdownMenuContent>
-										</DropdownMenu>
+										<Button
+											variant="ghost"
+											size="icon"
+											className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+											aria-label={t("common.delete")}
+											onClick={(e) => {
+												e.stopPropagation();
+												onDeleteChat(chat.id);
+											}}
+										>
+											<Trash2 className="h-3.5 w-3.5" />
+										</Button>
 									</div>
 								))
 							)}
@@ -231,7 +213,11 @@ export function ChatSidebar({
 	if (isMobile) {
 		return (
 			<Sheet open={isOpen} onOpenChange={setOpen}>
-				<SheetContent side="left" className="w-80 bg-background/95 p-0 backdrop-blur-lg [&>button]:z-50">
+				{/* Mobile: ~2/3 of previous w-80 (320px → ~213px) */}
+				<SheetContent
+					side="left"
+					className="w-[min(13.5rem,72vw)] max-w-[13.5rem] bg-background/95 p-0 backdrop-blur-lg [&>button]:z-50"
+				>
 					<SheetTitle className="sr-only">{t("chat.chatHistory")}</SheetTitle>
 					<SheetDescription className="sr-only">{t("chat.chatWith")}</SheetDescription>
 					<SidebarContent />
@@ -239,7 +225,7 @@ export function ChatSidebar({
 			</Sheet>
 		);
 	}
-	// Desktop: offset by global rail (16) when present
+	// Desktop: keep full width sidebar
 	return (
 		<>
 			<div

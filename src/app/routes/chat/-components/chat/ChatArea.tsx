@@ -170,12 +170,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
 						<div className="flex items-center gap-3">
 							{/* Mobile sidebar trigger - only show on mobile */}
 							{isMobile && <ChatSidebarTrigger className="-ml-4 flex-shrink-0" />}
-							{/* App Icon */}
-							<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/80">
-								<span className="text-lg">🎨</span>
-							</div>
 							{/* Content area */}
-							<div className="flex min-w-0 flex-1 items-center justify-between">
+							<div className="flex min-w-0 flex-1 items-center justify-between gap-2">
 								<div className="min-w-0 flex-1">
 									<h2 className="truncate bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text font-bold text-lg text-transparent md:text-xl">
 										{displayChat.title}

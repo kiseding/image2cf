@@ -353,7 +353,8 @@ const getEnabledRelaysAsProviders = async (ctx: RequestContext) => {
 	});
 
 	return rows.map((r) => {
-		const models = ((r.models as RelayModel[]) || []).map((m) => ({
+		// Last-added model first (array is append-only when user adds models)
+		const models = [...((r.models as RelayModel[]) || [])].reverse().map((m) => ({
 			id: m.id,
 			name: m.name,
 			// ability always i2i so UI allows reference images; actual route is by has-images

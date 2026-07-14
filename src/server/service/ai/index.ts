@@ -76,7 +76,8 @@ const getEnabledAiProvidersWithModels = async (ctx: RequestContext) => {
 	const { relayService } = await import("../relay");
 	const relayProviders = await relayService.getEnabledRelaysAsProviders(ctx);
 
-	return [...systemProviders, ...relayProviders];
+	// Relays first so newest user models appear / auto-select first
+	return [...relayProviders, ...systemProviders];
 };
 
 export const GetAiProviderByIdSchema = z.object({
