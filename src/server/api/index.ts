@@ -13,6 +13,7 @@ import aiRouter from "./routes/ai";
 import chatsRouter from "./routes/chat";
 import fileRouter from "./routes/file";
 import relayRouter from "./routes/relay";
+import setupRouter from "./routes/setup";
 import userRouter from "./routes/settings";
 import type { ApiResult, Env } from "./util";
 
@@ -130,6 +131,7 @@ app.onError((err, c) => {
 
 const route = app
 	.basePath("/api")
+	.route("/", setupRouter)
 	.route("/", chatsRouter)
 	.route("/", userRouter)
 	.route("/", aiRouter)
