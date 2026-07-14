@@ -6,7 +6,8 @@ export const authClient = createAuthClient({
 
 /** Username login — never sends email to the client API */
 export async function loginWithUsername(username: string, password: string) {
-	const resp = await fetch("/api/auth/username-login", {
+	// Must NOT be under /api/auth/* (owned by better-auth)
+	const resp = await fetch("/api/login", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		credentials: "include",

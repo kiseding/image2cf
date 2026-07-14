@@ -8,12 +8,11 @@ import { readWorkerEnv } from "@/server/lib/worker-env";
 import { type Env, error } from "../util";
 
 /**
- * Username + password login only.
- * Does not use email sign-in on the client path.
- * Creates better-auth compatible signed session cookie.
+ * Username + password login.
+ * Path is /api/login (NOT under /api/auth/* which is owned by better-auth).
  */
-const app = new Hono<Env>().basePath("/auth").post(
-	"/username-login",
+const app = new Hono<Env>().basePath("/login").post(
+	"/",
 	zValidator(
 		"json",
 		z.object({
@@ -35,7 +34,6 @@ const app = new Hono<Env>().basePath("/auth").post(
 		try {
 			let user = await findUser(d1, uname);
 
-			// Create admin on first successful ADMIN_PASSWORD login
 			if (!user && uname === "admin" && workerEnv.ADMIN_PASSWORD && password === workerEnv.ADMIN_PASSWORD) {
 				user = await ensureAdmin(d1, password, workerEnv.ADMIN_NAME || "Admin");
 			}
@@ -58,11 +56,9 @@ const app = new Hono<Env>().basePath("/auth").post(
 
 			let valid = account?.password ? await verifyPassword(account.password, password) : false;
 
-			// Admin: ADMIN_PASSWORD always works and repairs stored hash
 			const isAdmin = user.role === "admin" || uname === "admin";
 			if (!valid && isAdmin && workerEnv.ADMIN_PASSWORD && password === workerEnv.ADMIN_PASSWORD) {
 				await setCredentialPassword(d1, user.id, account?.id, password);
-				// also normalize admin fields
 				await d1
 					.prepare(
 						`UPDATE user SET username = 'admin', email = ?, email_verified = 1, role = 'admin', banned = 0, updated_at = ? WHERE id = ?`,
@@ -88,7 +84,12 @@ const app = new Hono<Env>().basePath("/auth").post(
 				await d1.prepare(`UPDATE user SET username = ? WHERE id = ?`).bind(uname, user.id).run();
 			}
 
-			const session = await createDbSession(d1, user.id, c.req.header("user-agent"), c.req.header("cf-connecting-ip"));
+			const session = await createDbSession(
+				d1,
+				user.id,
+				c.req.header("user-agent"),
+				c.req.header("cf-connecting-ip"),
+			);
 			const cookie = await buildSignedSessionCookie(auth, session.token);
 
 			return new Response(
@@ -112,7 +113,7 @@ const app = new Hono<Env>().basePath("/auth").post(
 				},
 			);
 		} catch (e) {
-			console.error("[image2cf] username-login error:", e);
+			console.error("[image2cf] login error:", e);
 			return c.json(error("error", "Login failed"), 500);
 		}
 	},
@@ -213,7 +214,6 @@ async function buildSignedSessionCookie(auth: any, token: string) {
 	return `${cookieName}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
-/** Match better-auth signed cookie: HMAC-SHA256 base64url without padding */
 async function hmacSignBase64UrlNoPad(secret: string, data: string) {
 	const key = await crypto.subtle.importKey(
 		"raw",
