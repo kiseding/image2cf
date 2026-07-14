@@ -615,7 +615,6 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		);
 		const softTimer = setInterval(() => {
 			soft = Math.min(82, soft + 1);
-			// Keep progress.updatedAt fresh so getGenerationStatus does not false-TIMEOUT
 			void setGenerationProgress(
 				generationId,
 				"calling_api",
@@ -623,7 +622,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				{ message: "waiting_upstream", meta: lastMeta || undefined, elapsedMs: Date.now() - wallStart },
 				{ touchRow: false },
 			).catch(() => {});
-		}, 2500);
+		}, 10_000);
 
 		let result;
 		try {
@@ -695,6 +694,24 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			clearInterval(softTimer);
 		}
 
+		// Save relay meta into parameters for post-mortem (single write, no per-tick D1 spam)
+		try {
+			const cur = await db.query.messageGenerations.findFirst({
+				where: eq(messageGenerations.id, generationId),
+				columns: { parameters: true },
+			});
+			const pp = (cur?.parameters as any) || {};
+			await db
+				.update(messageGenerations)
+				.set({
+					parameters: { ...pp, relayMeta: lastMeta, upstreamDoneAt: new Date().toISOString() },
+					updatedAt: new Date().toISOString(),
+				})
+				.where(eq(messageGenerations.id, generationId));
+		} catch {
+			/* non-fatal */
+		}
+
 		await setGenerationProgress(generationId, "parsing", 85, {
 			message: "parsing_response",
 			meta: lastMeta || undefined,
@@ -710,7 +727,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				.set({
 					status: "failed",
 					errorReason: result.errorReason,
-					updatedAt: now.toISOString(),
+					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
@@ -727,7 +744,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				.set({
 					status: "failed",
 					errorReason: "API_ERROR",
-					updatedAt: now.toISOString(),
+					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
@@ -738,13 +755,11 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			imageCount: result.images.length,
 		});
 
-		// Persist ASAP so UI can show images even if waitUntil is cut shortly after
 		let fileIds: string[] = [];
 		try {
 			fileIds = await saveFiles(result.images, userId);
 		} catch (saveErr) {
 			console.error("[generate] saveFiles error", saveErr);
-			// Last resort: if images are already http(s) URLs, store them without R2
 			const urls = result.images.filter((u) => /^https?:\/\//i.test(u));
 			if (urls.length) {
 				try {
@@ -761,42 +776,48 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				.set({
 					status: "failed",
 					errorReason: "API_ERROR",
-					updatedAt: now.toISOString(),
+					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
 		}
 
-		const prevParams =
-			(
-				await db.query.messageGenerations.findFirst({
-					where: eq(messageGenerations.id, generationId),
-					columns: { parameters: true },
-				})
-			)?.parameters || {};
+		// CRITICAL: completed write with retry — if this fails, UI is stuck forever
+		const completedAt = new Date().toISOString();
+		const completedPatch = {
+			status: "completed" as const,
+			fileIds: [...fileIds],
+			generationTime: Date.now() - now.getTime(),
+			parameters: {
+				relayMeta: lastMeta,
+				progress: {
+					phase: "completed",
+					percent: 100,
+					updatedAt: completedAt,
+					message: "done",
+					saved: fileIds.length,
+				},
+			} as any,
+			updatedAt: completedAt,
+		};
 
-		// Atomic complete — include fileIds as plain string array for D1 json column
-		await db
-			.update(messageGenerations)
-			.set({
-				status: "completed",
-				fileIds: [...fileIds],
-				generationTime: Date.now() - now.getTime(),
-				parameters: {
-					...(prevParams as any),
-					progress: {
-						phase: "completed",
-						percent: 100,
-						updatedAt: new Date().toISOString(),
-						message: "done",
-						saved: fileIds.length,
-					},
-				} as any,
-				updatedAt: new Date().toISOString(),
-			})
-			.where(eq(messageGenerations.id, generationId));
-
-		console.log("[generate] completed", generationId, "files", fileIds.length);
+		let completed = false;
+		for (let attempt = 0; attempt < 3 && !completed; attempt++) {
+			try {
+				await db
+					.update(messageGenerations)
+					.set(completedPatch)
+					.where(eq(messageGenerations.id, generationId));
+				completed = true;
+			} catch (e) {
+				console.error(`[generate] completed write attempt ${attempt + 1} failed`, e);
+				if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+			}
+		}
+		if (!completed) {
+			console.error("[generate] FATAL: could not write completed status after 3 attempts", generationId);
+		}
+		console.log("[generate] completed", generationId, "files", fileIds.length, "attempts", completed ? 1 : "FAILED");
 	} catch (error) {
 		console.error("Error generating image:", error);
 		const msg = error instanceof Error ? error.message : String(error);
