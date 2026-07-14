@@ -596,9 +596,10 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			height,
 		};
 
-		// Soft progress while waiting on upstream (most image APIs are not streamable)
+		// Soft progress while waiting on upstream (most image APIs are not streamable).
+		// gpt-image-2 relays often take 1–4 minutes; wall must be longer than poll "quiet" timeout.
 		const wallStart = Date.now();
-		const WALL_MS = 200_000;
+		const WALL_MS = 360_000; // 6 minutes hard cap
 		let soft = 25;
 		let lastMeta: any = null;
 		const abortCtrl = new AbortController();
@@ -613,15 +614,16 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			{ touchRow: true },
 		);
 		const softTimer = setInterval(() => {
-			soft = Math.min(78, soft + 2);
+			soft = Math.min(82, soft + 1);
+			// Keep progress.updatedAt fresh so getGenerationStatus does not false-TIMEOUT
 			void setGenerationProgress(
 				generationId,
 				"calling_api",
 				soft,
-				{ message: "waiting_upstream", meta: lastMeta || undefined },
+				{ message: "waiting_upstream", meta: lastMeta || undefined, elapsedMs: Date.now() - wallStart },
 				{ touchRow: false },
 			).catch(() => {});
-		}, 3000);
+		}, 2500);
 
 		let result;
 		try {
@@ -974,15 +976,18 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 				})()
 			: [];
 
-	// Prefer progress.startedAt — soft progress used to bump updatedAt and hide staleness
+	// Heartbeat = progress.updatedAt (soft ticks every ~3s while worker is alive).
+	// NEVER use startedAt alone — that killed jobs still waiting on slow gpt-image (~2–4 min).
 	const startedAtIso = progress?.startedAt || generation.createdAt;
+	const heartbeatIso = progress?.updatedAt || generation.updatedAt || startedAtIso;
 	const ageMs = Date.now() - new Date(startedAtIso).getTime();
-	// Informational only — clients must NOT re-trigger generate on stale
+	const quietMs = Date.now() - new Date(heartbeatIso).getTime();
+	// Worker dead only if no progress heartbeat for 2+ minutes (not "running for 2+ minutes")
 	const stale =
-		(generation.status === "pending" || generation.status === "generating") && ageMs > 150_000;
+		(generation.status === "pending" || generation.status === "generating") && quietMs > 120_000;
 
-	// Server-side: auto-fail very stale jobs so UI stops "generating" without a second bill
-	if (stale && (generation.status === "pending" || generation.status === "generating")) {
+	// Auto-fail only when heartbeat is dead (worker likely gone). Long-running but live jobs are fine.
+	if (stale) {
 		await db
 			.update(messageGenerations)
 			.set({
@@ -995,9 +1000,16 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 			...generation,
 			status: "failed" as const,
 			errorReason: "TIMEOUT" as const,
-			progress: { ...(progress || {}), phase: "failed", percent: 100, message: "timeout" },
+			progress: {
+				...(progress || {}),
+				phase: "failed",
+				percent: 100,
+				message: "worker_quiet_timeout",
+				quietMs,
+			},
 			stale: true,
 			ageMs,
+			quietMs,
 			resultUrls: undefined,
 		};
 	}
@@ -1047,16 +1059,15 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 		return { success: true, skipped: true, reason: "already_completed" as const };
 	}
 	// Already running: never auto re-call the relay (would double-bill / double-generate).
-	// Stale jobs are marked TIMEOUT; user can click retry.
+	// Use heartbeat (progress.updatedAt), not startedAt — slow models tick for minutes.
 	if (generation.status === "generating") {
 		const params = (generation.parameters as any) || {};
-		const startedIso = params.progress?.startedAt || generation.createdAt || generation.updatedAt;
-		const started = new Date(startedIso).getTime();
-		const age = Date.now() - started;
-		if (age < 150_000) {
+		const hbIso = params.progress?.updatedAt || generation.updatedAt || generation.createdAt;
+		const quiet = Date.now() - new Date(hbIso).getTime();
+		if (quiet < 120_000) {
 			return { success: true, skipped: true, reason: "already_generating" as const };
 		}
-		console.warn("[generate] stale generating job — mark TIMEOUT, do not re-run", generation.id, "ageMs", age);
+		console.warn("[generate] quiet generating job — mark TIMEOUT, do not re-run", generation.id, "quietMs", quiet);
 		await db
 			.update(messageGenerations)
 			.set({

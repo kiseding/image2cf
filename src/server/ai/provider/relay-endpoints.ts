@@ -60,10 +60,10 @@ const sizeMap: Record<string, string> = {
 	"3:4": "1024x1536",
 };
 
-/** Default upstream timeout (ms) */
-const RELAY_FETCH_TIMEOUT_MS = 180_000;
+/** Default upstream timeout (ms) — gpt-image relays often need 2–5 min */
+const RELAY_FETCH_TIMEOUT_MS = 300_000;
 /** Allow large b64_json bodies (gpt-image can be multi‑MB) */
-const MAX_RESPONSE_BYTES = 40 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 48 * 1024 * 1024;
 
 export type RelayCallMeta = {
 	url: string;
@@ -75,6 +75,7 @@ export type RelayCallMeta = {
 	imageCount?: number;
 	error?: string;
 	ms?: number;
+	phase?: string;
 };
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = RELAY_FETCH_TIMEOUT_MS, externalSignal?: AbortSignal) {
@@ -258,7 +259,8 @@ export async function generateViaEndpointPaths(params: {
 			/* ignore */
 		}
 
-		report({ httpStatus: resp.status, ok: resp.ok, bodyBytes: bytes });
+		report({ httpStatus: resp.status, ok: resp.ok, bodyBytes: bytes, phase: "body_read" });
+		console.log(`[relay] ${kind} ${url} http=${resp.status} bytes=${bytes} ms=${Date.now() - t0}`);
 
 		if (!resp.ok) {
 			const msg = json?.error?.message || json?.message || text.slice(0, 300);
