@@ -1,124 +1,107 @@
 # image2cf
 
-Multi-user AI image generation with admin-managed users, custom relay stations, and image-to-image references. Deploy to Cloudflare Workers or Node.js.
+Multi-user **AI image generation** on **Cloudflare Workers + D1 + R2**: admin-managed accounts, user-defined relay stations, and reference images for i2i.
 
-Based on [typix-image](https://github.com/kiseding/typix-image).
+Forked from [typix-image](https://github.com/kiseding/typix-image).
 
 <p align="center">
-  <a href="README.md">简体中文</a> | English
+  English · <a href="README.md">简体中文</a>
 </p>
 
 ---
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **Multi-user** | No public signup; admin creates / bans / resets / deletes users |
-| **Relay stations** | Per-user OpenAI / Google-compatible proxies |
-| **Image references** | Reuse past generations as i2i inputs |
-| **Providers** | Cloudflare Workers AI, OpenAI, Google, Flux, Fal, … |
-| **Runtimes** | Cloudflare Workers (recommended) / Node.js |
-
-Config and secrets come from **GitHub Secrets / Cloudflare Dashboard / env vars** — **do not commit real IDs into `wrangler.toml`**.
+| Feature | Notes |
+|---------|--------|
+| Multi-user, no public signup | Admin creates users; username login |
+| Default admin | Username `admin`, password from `ADMIN_PASSWORD` |
+| Relays | OpenAI-compatible Base URL + API Key + models; paths: t2i / i2i / edit |
+| Image-to-image | Upload or cite history images → i2i path |
+| Storage | **R2** for bytes; D1 for metadata; preview links permanent; objects purged after **30 days** (configurable) |
+| Progress | Server-side stages (most image APIs are not pixel-streamable) |
+| Debug | `DEBUG=true` enables `/api/debug/*` |
 
 ---
 
-## Deploy: Workers + GitHub Actions
+## Deploy (GitHub Actions)
 
-### 1. Create D1
+### Secrets
 
-Dashboard → **D1** → create DB (e.g. `image2cf`) → copy **Database ID**. Keep it out of the repo.
+| Secret | Required |
+|--------|----------|
+| `CLOUDFLARE_API_TOKEN` | ✅ |
+| `CLOUDFLARE_ACCOUNT_ID` | ✅ |
+| `CLOUDFLARE_D1_DATABASE_ID` | ✅ |
+| `ADMIN_PASSWORD` | ✅ |
+| `WORKER_URL` | Recommended |
+| `CLOUDFLARE_R2_BUCKET_NAME` | Optional (default `image2cf`) |
 
-### 2. API Token
+Push to `main` or run **Deploy Cloudflare Workers** workflow.
 
-Permissions: Workers Edit, D1 Edit, Account Settings Read. Note **Token** and **Account ID**.
+Login: `admin` + `ADMIN_PASSWORD`.  
+Check: `GET /api/setup/status`, `POST /api/setup/bootstrap`.
 
-### 3. GitHub Secrets
+### Important Worker vars
 
-| Secret | Description |
-|--------|-------------|
-| `CLOUDFLARE_API_TOKEN` | API token |
-| `CLOUDFLARE_ACCOUNT_ID` | Account ID |
-| `CLOUDFLARE_D1_DATABASE_ID` | D1 database UUID |
-| `ADMIN_PASSWORD` | Password for default admin `admin` (synced to Worker Secret on deploy) |
-| `WORKER_URL` | Optional Worker URL for post-deploy bootstrap |
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `FILE_STORAGE` | `r2` | Image backend |
+| `R2_RETENTION_DAYS` | `30` | Object lifetime |
+| `DEBUG` | off | Debug API |
+| `MODE` | `mixed` | Login required |
 
-CI injects the D1 ID into a temporary `wrangler.toml` at runtime (never committed).
+---
 
-### 4. Worker variables (Dashboard)
+## Relay setup
 
-After first deploy → **Workers → image2cf → Variables and Secrets**:
+Settings → Relay:
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ADMIN_PASSWORD` | ✅ | Password for default admin user `admin` |
-| `ADMIN_NAME` | | Display name |
+- Base URL e.g. `https://api.example.com/v1`
+- Paths: `/images/generations` (t2i), `/images/edits` (i2i/edit)
+- Models: IDs only; routing by presence of reference images
+- Newest models listed first
 
-Deploy uses `--keep-vars` so Dashboard vars/secrets are preserved.
+---
 
-### 5. Trigger
-
-- Push to `main`, or  
-- Actions → **Deploy Cloudflare Workers** → Run workflow  
-
-### Local deploy (env only)
+## Debug (`DEBUG=true`)
 
 ```bash
-export CLOUDFLARE_API_TOKEN=...
-export CLOUDFLARE_ACCOUNT_ID=...
-export CLOUDFLARE_D1_DATABASE_ID=...
-
-pnpm install && pnpm build && pnpm deploy
+curl -sS "https://YOUR_HOST/api/debug/generations"
+curl -sS -X POST "https://YOUR_HOST/api/debug/generations/fail-stale?maxAgeSec=120"
 ```
 
+| Path | Purpose |
+|------|---------|
+| `GET /api/debug/generations` | Recent jobs |
+| `POST /api/debug/generations/fail-stale` | Mark stuck jobs as TIMEOUT |
+| `GET /api/debug/generations/:id` | One job + file info |
+
+Turn `DEBUG` off in production when done.
+
 ---
 
-## Local development (Node)
+## Local
 
 ```bash
-cp .env.node.example .env
-# set DATABASE_URL, ADMIN_PASSWORD, MODE=mixed
+pnpm install
+# DATABASE_URL=file:./db.sqlite ADMIN_PASSWORD=... MODE=mixed
 pnpm db:push && pnpm dev
-```
-
----
-
-## Usage
-
-1. Login with bootstrap admin  
-2. **Settings → Users** — create accounts  
-3. **Settings → Relay stations** — Base URL / API key / models  
-4. **Settings → AI providers** — optional system providers  
-5. Chat → **Use as reference** for image-to-image  
-
----
-
-## Scripts
-
-```bash
-pnpm deploy              # inject D1 ID + migrate + deploy --keep-vars
-pnpm deploy:no-migrate   # inject D1 ID + deploy only
-pnpm build / pnpm dev / pnpm db:push
 ```
 
 ---
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| Missing `CLOUDFLARE_D1_DATABASE_ID` | Add the secret |
-| Auth / migrate failures | Check token, account ID, D1 ID |
-| Dashboard vars wiped | Ensure deploy uses `--keep-vars` |
-| No admin | Set `ADMIN_*` on Worker; empty DB on first boot |
+| Issue | Action |
+|-------|--------|
+| Stuck “generating” | Deploy latest; `fail-stale`; check relay returns `url`/`b64_json` |
+| Relay OK, app empty | Parse fields; prefer URL responses |
+| 410 on image | R2 object expired (`R2_RETENTION_DAYS`) |
+| Login fails | Secret + bootstrap |
 
 ---
 
 ## License
 
 Apache-2.0.
-
-## Credits
-
-[typix](https://github.com/monkeyWie/typix) / [typix-image](https://github.com/kiseding/typix-image)

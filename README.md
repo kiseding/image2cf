@@ -1,136 +1,189 @@
 # image2cf
 
-多用户 AI 图像生成平台。支持管理员管控用户、自定义中转站、历史图片引用（图生图），可部署到 Cloudflare Workers 或 Node.js。
+多用户 AI **图像生成** 平台：管理员管账号、用户自配中转站、历史图引用图生图，默认部署在 **Cloudflare Workers + D1 + R2**。
 
 基于 [typix-image](https://github.com/kiseding/typix-image) 改造。
 
 <p align="center">
-  <a href="README_en-US.md">English</a> | 简体中文
+  <a href="README_en-US.md">English</a> · 简体中文
 </p>
 
+在线示例：`https://image.kiseding.top`（以你自己的域名为准）
+
 ---
 
-## 功能特性
+## 功能一览
 
-| 功能 | 说明 |
+| 能力 | 说明 |
 |------|------|
-| **多用户** | 禁止公开注册；管理员创建 / 禁用 / 重置密码 / 删除用户 |
-| **多中转站** | 用户自配 OpenAI / Google 兼容接口（Base URL + API Key + 模型） |
-| **图生图引用** | 将历史生成或上传图片一键加入输入区作为参考图 |
-| **多模型** | Cloudflare Workers AI、OpenAI、Google、Flux、Fal 等 |
-| **双运行时** | Cloudflare Workers（推荐）/ Node.js 自托管 |
+| **多用户 / 禁注册** | 仅管理员创建用户；用户名登录（非邮箱） |
+| **默认管理员** | 用户名固定 `admin`，密码来自 `ADMIN_PASSWORD` |
+| **中转站** | 自配协议 + Base URL + API Key + 模型；三路径：文生图 / 图生图 / 编辑 |
+| **图生图** | 上传或引用历史图；有图走 i2i 路径，无图走 t2i |
+| **尺寸** | 对话内数字宽高；中转模型可配默认 W/H |
+| **存储** | 默认 **R2** 存图；D1 存元数据与会话；预览链接永久，对象默认 **30 天**清理 |
+| **进度** | 服务端阶段进度（排队→请求→解析→保存）；多数生图 API **不支持**像素流式 |
+| **Debug** | `DEBUG=true` 时开放 `/api/debug/*`（排查生成卡住等） |
 
 ---
 
-## 架构说明
+## 技术栈
 
-- **前端**：React + Vite + TanStack Router
-- **后端**：Hono + better-auth + Drizzle ORM
-- **数据库**：Cloudflare D1（Workers）/ SQLite（Node）
-- **模式**：`MODE=mixed`（必须登录，服务端存储）
-
-配置与密钥通过 **GitHub Secrets / Cloudflare Dashboard / 环境变量** 注入，**无需修改并提交 `wrangler.toml`**。
+- **前端**：React + Vite + TanStack Router + i18n  
+- **后端**：Hono（Cloudflare Workers）  
+- **鉴权**：better-auth + 用户名登录 `/api/login`  
+- **数据**：Drizzle ORM · **D1**（会话/用户）· **R2**（图片）  
+- **部署**：GitHub Actions → `wrangler deploy --keep-vars`
 
 ---
 
-## 推荐部署：Cloudflare Workers + GitHub Actions
+## 快速部署（推荐）
 
-### 前置条件
+### 1. Cloudflare
 
-- Cloudflare 账号
-- 本仓库已推送到 GitHub
+1. 创建 **D1** 数据库（如 `image2cf`），记下 **Database ID**  
+2. 创建 **API Token**（Workers Edit、D1 Edit、Account Read；R2 需 Edit）  
+3. 记下 **Account ID**  
+4. R2 桶：CI 默认创建/使用 `image2cf`（可用 Secret 改名）
 
-### 步骤 1：创建 D1 数据库
+### 2. GitHub Secrets
 
-Cloudflare Dashboard → **Workers & Pages → D1** → 创建数据库（名称建议 `image2cf`）。
+仓库 → **Settings → Secrets and variables → Actions**：
 
-记下 **Database ID**（UUID）。**不要**写进仓库里的 `wrangler.toml`。
+| Secret | 必填 | 说明 |
+|--------|------|------|
+| `CLOUDFLARE_API_TOKEN` | ✅ | API Token |
+| `CLOUDFLARE_ACCOUNT_ID` | ✅ | Account ID |
+| `CLOUDFLARE_D1_DATABASE_ID` | ✅ | D1 UUID |
+| `ADMIN_PASSWORD` | ✅ | 管理员 `admin` 密码（部署时写入 Worker Secret） |
+| `WORKER_URL` | 建议 | 如 `https://image.kiseding.top`，用于部署后 bootstrap |
+| `CLOUDFLARE_R2_BUCKET_NAME` | 可选 | 默认 `image2cf` |
 
-### 步骤 2：创建 API Token
+**不要**把真实 D1 ID / 密钥写进仓库里的 `wrangler.toml`。
 
-**My Profile → API Tokens → Create Token**，建议权限：
+### 3. 触发部署
 
-- Account → Cloudflare Workers → Edit  
-- Account → D1 → Edit  
-- Account → Account Settings → Read  
+- push 到 `main`，或 Actions → **Deploy Cloudflare Workers** → Run workflow  
 
-记下 **API Token** 与 Dashboard 右侧的 **Account ID**。
+流程：安装依赖 → 注入 D1/R2 → 构建 → D1 迁移 → 部署 → 同步 `ADMIN_PASSWORD` → bootstrap。
 
-### 步骤 3：配置 GitHub Secrets（含管理员密码）
+### 4. 登录
 
-只需在 GitHub 配置，**部署时会自动同步到 Worker**，无需再去 Cloudflare Dashboard 手填密码。
+1. 打开站点  
+2. 用户名：`admin`  
+3. 密码：GitHub Secret `ADMIN_PASSWORD`  
 
-仓库 → **Settings → Secrets and variables → Actions**，新增：
+诊断：
 
-| Secret | 说明 |
-|--------|------|
-| `CLOUDFLARE_API_TOKEN` | API Token |
-| `CLOUDFLARE_ACCOUNT_ID` | Account ID |
-| `CLOUDFLARE_D1_DATABASE_ID` | D1 Database ID（UUID） |
-| `ADMIN_PASSWORD` | 默认管理员 `admin` 的密码（部署时自动写入 Worker Secret） |
-| `WORKER_URL` | 可选，Worker 访问地址，用于部署后自动 bootstrap |
+```text
+GET  /api/setup/status
+POST /api/setup/bootstrap
+```
 
-CI 会在运行时把 `CLOUDFLARE_D1_DATABASE_ID` 注入到临时 `wrangler.toml`，不会回写仓库。
+---
 
-### 步骤 4：配置 Worker 运行时变量（Dashboard）
+## Worker 环境变量
 
-部署成功后，在 **Workers → image2cf → Settings → Variables and Secrets** 配置：
-
-| 变量 | 必填 | 说明 |
+| 变量 | 默认 | 说明 |
 |------|------|------|
-| `ADMIN_PASSWORD` | ✅ | 默认管理员 `admin` 的密码（建议用 Secret） |
-| `ADMIN_NAME` | | 显示名，默认 `Admin` |
+| `ADMIN_PASSWORD` | — | Secret，管理员密码 |
+| `ADMIN_NAME` | `Admin` | 显示名 |
+| `MODE` | `mixed` | 必须登录，数据在服务端 |
+| `FILE_STORAGE` | `r2` | `r2` / `base64` |
+| `R2_RETENTION_DAYS` | `30` | R2 **文件字节**保留天数；D1 预览链接仍永久 |
+| `DEBUG` | 关 | 设为 `true` 开启 `/api/debug/*` |
+| `PROVIDER_CLOUDFLARE_BUILTIN` | `true` | 是否启用内置 Workers AI |
+| `BETTER_AUTH_SECRET` | 可选 | 会话签名；不设则回落 `ADMIN_PASSWORD` |
 
-部署命令使用 `--keep-vars`，**不会覆盖** Dashboard 上已配置的变量/密钥。
+绑定（`wrangler.toml`）：
 
-也可在本地（已登录 wrangler）执行：
+- `DB` → D1  
+- `R2` → R2 bucket  
+- `AI` → Workers AI（可选）  
+- Cron：`0 3 * * *` 清理过期 R2 对象  
+
+---
+
+## 使用说明
+
+### 管理员
+
+1. **设置 → 用户管理**：创建用户、改密、禁用、删除（无公开注册）  
+2. 建议只保留一个管理员账号  
+
+### 中转站（核心）
+
+**设置 → 中转站** 添加：
+
+| 字段 | 示例 |
+|------|------|
+| 名称 | 我的中转 |
+| 协议 | OpenAI 兼容 |
+| Base URL | `https://api.example.com/v1` |
+| API Key | `sk-...` |
+| 文生图路径 | `/images/generations` |
+| 图生图路径 | `/images/edits` |
+| 编辑路径 | `/images/edits`（可与图生图相同） |
+| 模型 | Model ID + 显示名 + 默认宽高 |
+
+说明：
+
+- **模型只是 ID**，路由由「有没有参考图」决定：无图 → t2i，有图 → i2i  
+- 最后添加的模型会排在前面  
+- 编辑时 API Key 留空表示不修改  
+
+### 对话
+
+- 新建会话标题：`新创作 1`、`新创作 2`…  
+- 偏好设置：张数、宽高（像素）  
+- 引用历史图 / 上传图 → 自动图生图  
+- 删除会话会清理消息、生成记录、文件行与 R2 对象  
+
+---
+
+## 生成进度与限制
+
+多数图像 API **不会**流式返回半张图。前端展示的是服务端阶段：
+
+`排队 → 准备 → 调用接口 → 解析 → 保存 → 完成`
+
+上游硬超时约 **2.5 分钟**；超时会标记 `TIMEOUT`，避免一直「生成中」。
+
+---
+
+## Debug（需 `DEBUG=true`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/debug/` | 绑定与存储模式 |
+| GET | `/api/debug/generations` | 最近生成记录 |
+| GET | `/api/debug/generations/:id` | 单条 + 文件预览信息 |
+| POST | `/api/debug/generations/fail-stale?maxAgeSec=120` | 将卡住的 pending/generating 标为 TIMEOUT |
+| GET | `/api/debug/relays` | 中转配置（Key 打码） |
+| POST | `/api/debug/parse-images` | 测试 JSON 图片解析 |
+| GET | `/api/debug/r2/list` | 列出 R2 对象 |
+
+生产用完后请关闭 `DEBUG`。
+
+示例：
 
 ```bash
-export CLOUDFLARE_API_TOKEN=...
-export CLOUDFLARE_ACCOUNT_ID=...
-export CLOUDFLARE_D1_DATABASE_ID=...
-
-npx wrangler secret put ADMIN_PASSWORD
-```
-
-
-### 步骤 5：触发部署
-
-- **自动**：push 到 `main`
-- **手动**：Actions → **Deploy Cloudflare Workers** → Run workflow
-
-流程：`pnpm install` → 注入 D1 ID → `pnpm build` → D1 迁移 → `wrangler deploy --keep-vars`
-
-成功后访问：`https://image2cf.<子域>.workers.dev`
-
-### 本地一键部署（可选）
-
-不改仓库文件，只通过环境变量：
-
-```bash
-export CLOUDFLARE_API_TOKEN="..."
-export CLOUDFLARE_ACCOUNT_ID="..."
-export CLOUDFLARE_D1_DATABASE_ID="你的-d1-uuid"
-
-pnpm install
-pnpm build
-pnpm deploy   # 自动 inject → migrate → deploy --keep-vars
+curl -sS "https://你的域名/api/debug/generations"
+curl -sS -X POST "https://你的域名/api/debug/generations/fail-stale?maxAgeSec=60"
 ```
 
 ---
 
-## 本地开发（Node.js）
+## 本地开发
 
 ```bash
 git clone https://github.com/kiseding/image2cf.git
 cd image2cf
 pnpm install
-cp .env.node.example .env
 ```
 
-编辑 `.env`（仅本地，勿提交）：
-
 ```env
+# .env（勿提交）
 DATABASE_URL="file:./db.sqlite"
 ADMIN_PASSWORD="change-me"
 MODE="mixed"
@@ -142,43 +195,11 @@ pnpm db:push
 pnpm dev
 ```
 
----
+Worker 本地：
 
-## 环境变量一览
-
-### GitHub Actions Secrets
-
-| Secret | 说明 |
-|--------|------|
-| `CLOUDFLARE_API_TOKEN` | 部署鉴权 |
-| `CLOUDFLARE_ACCOUNT_ID` | 账户 ID |
-| `CLOUDFLARE_D1_DATABASE_ID` | D1 Database ID |
-
-### Cloudflare Worker（Dashboard Variables / Secrets）
-
-| 变量 | 说明 |
-|------|------|
-| `ADMIN_PASSWORD` | 引导管理员密码 |
-| `ADMIN_NAME` | 管理员显示名 |
-| `PROVIDER_CLOUDFLARE_BUILTIN` | 是否用内置 Workers AI（`wrangler.toml` 默认 `true`，可用 Dashboard 覆盖） |
-
-### Node 本地
-
-| 变量 | 说明 |
-|------|------|
-| `DATABASE_URL` | 如 `file:./db.sqlite` |
-| `MODE` | 使用 `mixed` |
-| `FILE_STORAGE` | `base64` / `disk` / `r2` |
-
----
-
-## 使用指南
-
-1. 使用用户名 `admin` + `ADMIN_PASSWORD` 登录  
-2. **设置 → 用户管理**：创建用户（无公开注册）  
-3. **设置 → 中转站**：配置 Base URL、API Key、模型  
-4. **设置 → AI 提供商**：配置系统内置提供商（可选）  
-5. 对话生成后，悬停消息点 **用作参考图** 做图生图  
+```bash
+pnpm dev:worker
+```
 
 ---
 
@@ -186,27 +207,28 @@ pnpm dev
 
 ```bash
 pnpm dev                 # 本地开发
-pnpm dev:worker          # 本地 wrangler
 pnpm build               # Cloudflare 构建
 pnpm build:node          # Node 构建
-pnpm db:push             # 本地 SQLite schema
-pnpm db:migrate:worker   # 远程 D1 迁移（需已 inject 或 env 齐全）
-pnpm deploy              # inject D1 ID + 迁移 + 部署
-pnpm deploy:no-migrate   # inject D1 ID + 仅部署
+pnpm db:push             # 本地 schema
+pnpm db:migrate:worker   # 远程 D1 迁移
+pnpm deploy              # 注入 D1 + 迁移 + 部署
 ```
 
 ---
 
-## 目录结构（简要）
+## 目录结构
 
 ```
 image2cf/
-├── .github/workflows/deploy.yml   # Actions：Secrets 注入 D1 ID 后部署
-├── scripts/inject-d1-id.mjs       # 本地 deploy 时注入 D1 ID
+├── .github/workflows/deploy.yml
 ├── drizzle/migrations/
-├── src/app/                       # 前端
-├── src/server/                    # Hono API / Worker
-└── wrangler.toml                  # 不含真实 database_id
+├── src/app/                 # 前端
+├── src/server/
+│   ├── api/routes/          # login / chat / relay / admin / debug / setup
+│   ├── ai/provider/         # 中转三路径、解析
+│   ├── service/             # 业务
+│   └── worker.ts            # fetch + 定时清理 R2
+└── wrangler.toml            # 无真实密钥 / D1 ID
 ```
 
 ---
@@ -215,19 +237,35 @@ image2cf/
 
 | 现象 | 处理 |
 |------|------|
-| Actions：Missing `CLOUDFLARE_D1_DATABASE_ID` | 在仓库 Secrets 中配置该值 |
-| Actions 鉴权失败 | 检查 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` |
-| D1 迁移失败 | 确认 Database ID 正确，Token 有 D1 Edit |
-| Dashboard 变量被清掉 | 部署已加 `--keep-vars`；勿在 `wrangler.toml` 重复定义会覆盖的 vars |
-| 无法登录 | 确认 Dashboard 已设 `ADMIN_*`，且库为空时完成过首次启动 |
-| 中转站失败 | 检查 Base URL / API Key / 模型 ID |
-| 图生图不可用 | 切换到支持 I2I 的模型 |
+| 无法登录 | `ADMIN_PASSWORD` 是否同步；`GET /api/setup/status`；`POST /api/setup/bootstrap` |
+| Actions 失败 | 检查 Token / Account ID / D1 ID；Token 是否含 R2 |
+| 中转失败 | Base URL、Key、三路径、模型 ID；勿把文本模型当生图模型 |
+| 一直「生成中」 | 部署最新代码；`DEBUG=true` 看 generations；`fail-stale` 清理僵尸任务；看中转是否真返回 url/b64 |
+| 中转成功但无图 | 返回体字段不标准；用 `/api/debug/parse-images` 测 JSON；优先让中转返回 `url` |
+| 图片 410 | R2 对象超过 `R2_RETENTION_DAYS` 已清理，链接仍在 |
+| 删除会话 | 硬删除：消息、生成、files、R2 一并清 |
+
+### 生成状态字段（debug）
+
+- `pending`：已建任务  
+- `generating`：执行中（`parameters.progress` 含阶段与百分比）  
+- `completed`：有 `fileIds`  
+- `failed`：看 `errorReason`（`TIMEOUT` / `API_ERROR` / `CONFIG_ERROR` 等）  
+
+---
+
+## 安全注意
+
+- 中转 **API Key** 存 D1，列表/详情对前端脱敏  
+- 中转 Base URL 禁止内网 / metadata（SSRF 防护）  
+- 登录与生图有简易限流  
+- `DEBUG` 勿长期开在公网  
 
 ---
 
 ## 许可证
 
-Apache-2.0（继承上游项目许可）。
+Apache-2.0（继承上游）。
 
 ## 致谢
 
