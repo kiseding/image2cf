@@ -371,14 +371,7 @@ const getEnabledRelaysAsProviders = async (ctx: RequestContext) => {
 			type: r.type,
 			enabled: true,
 			models,
-			_relay: {
-				id: r.id,
-				type: r.type,
-				baseURL: r.baseURL,
-				apiKey: r.apiKey,
-				apiMode: (r as any).apiMode || "endpoints",
-				endpoints: (r as any).endpoints || null,
-			},
+			// Do not expose credentials / internals to the model selector API
 		};
 	});
 };

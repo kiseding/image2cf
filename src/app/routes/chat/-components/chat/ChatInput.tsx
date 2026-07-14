@@ -275,7 +275,7 @@ export function ChatInput({
 		}))
 		.filter((slide) => slide.src); // Filter out slides without valid src
 	return (
-		<div className="sticky bottom-0 z-20 border-border/50 border-t bg-background/95 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-md md:px-6 md:pt-3 md:pb-4">
+		<div className="shrink-0 border-border/50 border-t bg-background/95 px-3 pt-2 pb-[max(0.35rem,env(safe-area-inset-bottom))] backdrop-blur-md md:px-6 md:pt-3 md:pb-3">
 			<div className="mx-auto w-full max-w-4xl">
 				{/* Input Area */}
 				<div className="relative">

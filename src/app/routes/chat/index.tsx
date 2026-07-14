@@ -87,9 +87,11 @@ function ChatPageContent() {
 			providers &&
 			providers.length > 0
 		) {
-			const firstEnabledProvider = providers.find((p) => p.enabled && p.models.length > 0);
+			const firstEnabledProvider = providers.find((p) => p.enabled && p.models?.length > 0);
 			if (firstEnabledProvider) {
-				const firstEnabledModel = firstEnabledProvider.models.find((m) => m.enabled);
+				// API already returns enabled models; `enabled` may be missing on relay models
+				const firstEnabledModel =
+					firstEnabledProvider.models.find((m) => m.enabled !== false) || firstEnabledProvider.models[0];
 				if (firstEnabledModel) {
 					setSelectedProvider(firstEnabledProvider.id);
 					setSelectedModel(firstEnabledModel.id);
@@ -189,8 +191,7 @@ function ChatPageContent() {
 	};
 
 	return (
-		<div className="flex h-full">
-			{" "}
+		<div className="flex h-full min-h-0">
 			{/* Chat Sidebar - Fixed positioning, will handle its own layout */}
 			<ChatSidebar
 				chats={chats}

@@ -40,7 +40,7 @@
 		"imageGenerated": "图片生成成功",
 		"thinking": "AI思考中...",
 		"generating": "生成图片中...",
-		"selectModel": "选择AI模型",
+		"selectModel": "选择模型",
 		"welcomeMessage": "描述您想要创建的图片！让您的想象力尽情发挥。",
 		"generatedImage": "生成的图片",
 		"userImage": "上传的图片",
@@ -84,7 +84,9 @@
 		"imageSize": "图片尺寸",
 		"width": "宽",
 		"height": "高",
-		"imageSizeHint": "输入像素宽高；中转站会以 size/width/height 传递"
+		"imageSizeHint": "输入像素宽高；中转站会以 size/width/height 传递",
+		"modelLoadFailed": "模型加载失败，点击重试",
+		"configureRelay": "请先配置中转站/模型"
 	},
 	"navigation": {
 		"chat": "对话",

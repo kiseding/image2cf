@@ -12,9 +12,11 @@ export default {
     },
     extend: {
       height: {
-        // Custom height for mobile content area excluding bottom navigation
-        // Mobile bottom nav height is h-16 (4rem = 64px)
-        app: "calc(100dvh - 4rem)",
+        // Full viewport height (mobile bottom nav removed)
+        app: "100dvh",
+      },
+      maxHeight: {
+        app: "100dvh",
       },
       animation: {
         "spin-slow": "spin 20s linear infinite",

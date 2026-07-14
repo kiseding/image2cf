@@ -43,12 +43,14 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 			return { provider: undefined, model: undefined };
 		}
 
-		const firstEnabledProvider = providers.find((p) => p.enabled && p.models.length > 0);
+		const firstEnabledProvider = providers.find((p) => p.enabled && p.models?.length > 0);
 		if (!firstEnabledProvider) {
 			return { provider: undefined, model: undefined };
 		}
 
-		const firstEnabledModel = firstEnabledProvider.models.find((m) => m.enabled);
+		// Relay models may omit `enabled`; treat as enabled unless explicitly false
+		const firstEnabledModel =
+			firstEnabledProvider.models.find((m) => m.enabled !== false) || firstEnabledProvider.models[0];
 		if (!firstEnabledModel) {
 			return { provider: undefined, model: undefined };
 		}
