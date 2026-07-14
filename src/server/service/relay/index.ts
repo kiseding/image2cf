@@ -14,12 +14,22 @@ import { type RequestContext, getContext } from "../context";
 const RelayModelSchema = z.object({
 	id: z.string().min(1),
 	name: z.string().min(1),
-	ability: z.enum(["t2i", "i2i"]).default("i2i"),
-	maxInputImages: z.number().int().min(1).max(10).default(1),
+	// optional legacy field — routing no longer depends on it
+	ability: z.enum(["t2i", "i2i"]).optional(),
+	maxInputImages: z.number().int().min(1).max(16).default(4),
 	supportedAspectRatios: z.array(z.enum(["1:1", "16:9", "9:16", "4:3", "3:4"])).optional(),
 });
 
 export type RelayModel = z.infer<typeof RelayModelSchema>;
+
+const EndpointsSchema = z.object({
+	/** 文生图 */
+	t2i: z.string().min(1).default("/images/generations"),
+	/** 图生图（有引用/上传图时） */
+	i2i: z.string().min(1).default("/images/edits"),
+	/** 编辑图片（局部编辑等同 edits；可配不同 path） */
+	edit: z.string().min(1).default("/images/edits"),
+});
 
 export const CreateRelaySchema = z.object({
 	name: z.string().min(1).max(64),
@@ -27,8 +37,9 @@ export const CreateRelaySchema = z.object({
 	baseURL: z.string().url(),
 	apiKey: z.string().min(1),
 	models: z.array(RelayModelSchema).min(1),
-	/** OpenAI-compatible only: auto | images | responses */
-	apiMode: z.enum(["auto", "images", "responses"]).default("auto"),
+	/** OpenAI: endpoints(推荐) | auto | images | responses */
+	apiMode: z.enum(["auto", "images", "responses", "endpoints"]).default("endpoints"),
+	endpoints: EndpointsSchema.optional(),
 	enabled: z.boolean().default(true),
 });
 export type CreateRelay = z.infer<typeof CreateRelaySchema>;
@@ -40,7 +51,8 @@ export const UpdateRelaySchema = z.object({
 	baseURL: z.string().url().optional(),
 	apiKey: z.string().min(1).optional(),
 	models: z.array(RelayModelSchema).min(1).optional(),
-	apiMode: z.enum(["auto", "images", "responses"]).optional(),
+	apiMode: z.enum(["auto", "images", "responses", "endpoints"]).optional(),
+	endpoints: EndpointsSchema.optional(),
 	enabled: z.boolean().optional(),
 });
 export type UpdateRelay = z.infer<typeof UpdateRelaySchema>;
@@ -78,7 +90,8 @@ const listRelays = async (ctx: RequestContext) => {
 		apiKey: r.apiKey ? `${r.apiKey.slice(0, 4)}****${r.apiKey.slice(-4)}` : "",
 		hasApiKey: !!r.apiKey,
 		models: (r.models as RelayModel[]) || [],
-		apiMode: (r as any).apiMode || "auto",
+		apiMode: (r as any).apiMode || "endpoints",
+		endpoints: (r as any).endpoints || null,
 		enabled: r.enabled,
 		createdAt: r.createdAt,
 		updatedAt: r.updatedAt,
@@ -100,7 +113,12 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 		baseURL: row.baseURL,
 		apiKey: row.apiKey,
 		models: (row.models as RelayModel[]) || [],
-		apiMode: (row as any).apiMode || "auto",
+		apiMode: (row as any).apiMode || "endpoints",
+		endpoints: (row as any).endpoints || {
+			t2i: "/images/generations",
+			i2i: "/images/edits",
+			edit: "/images/edits",
+		},
 		enabled: row.enabled,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
@@ -118,7 +136,12 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			baseURL: normalizeRelayBaseURL(req.type, req.baseURL),
 			apiKey: req.apiKey.trim(),
 			models: req.models,
-			apiMode: req.type === "openai" ? req.apiMode || "auto" : "auto",
+			apiMode: req.type === "openai" ? req.apiMode || "endpoints" : "auto",
+			endpoints:
+				req.endpoints ||
+				(req.type === "openai"
+					? { t2i: "/images/generations", i2i: "/images/edits", edit: "/images/edits" }
+					: null),
 			enabled: req.enabled,
 		})
 		.returning();
@@ -144,6 +167,7 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 			...(req.apiKey !== undefined ? { apiKey: req.apiKey.trim() } : {}),
 			...(req.models !== undefined ? { models: req.models } : {}),
 			...(req.apiMode !== undefined ? { apiMode: req.apiMode } : {}),
+			...(req.endpoints !== undefined ? { endpoints: req.endpoints } : {}),
 			...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
 			updatedAt: new Date().toISOString(),
 		})
@@ -309,8 +333,9 @@ const getEnabledRelaysAsProviders = async (ctx: RequestContext) => {
 		const models = ((r.models as RelayModel[]) || []).map((m) => ({
 			id: m.id,
 			name: m.name,
-			ability: m.ability || "i2i",
-			maxInputImages: m.maxInputImages || 1,
+			// ability always i2i so UI allows reference images; actual route is by has-images
+			ability: "i2i" as const,
+			maxInputImages: m.maxInputImages || 4,
 			enabledByDefault: true,
 			enabled: true,
 			supportedAspectRatios: m.supportedAspectRatios,
@@ -321,12 +346,13 @@ const getEnabledRelaysAsProviders = async (ctx: RequestContext) => {
 			type: r.type,
 			enabled: true,
 			models,
-			// settings used internally for generation
 			_relay: {
 				id: r.id,
 				type: r.type,
 				baseURL: r.baseURL,
 				apiKey: r.apiKey,
+				apiMode: (r as any).apiMode || "endpoints",
+				endpoints: (r as any).endpoints || null,
 			},
 		};
 	});
@@ -352,7 +378,12 @@ const resolveRelayForGeneration = async (providerId: string, ctx: RequestContext
 		baseURL: row.baseURL,
 		apiKey: row.apiKey,
 		models: (row.models as RelayModel[]) || [],
-		apiMode: ((row as any).apiMode || "auto") as "auto" | "images" | "responses",
+		apiMode: ((row as any).apiMode || "endpoints") as "auto" | "images" | "responses" | "endpoints",
+		endpoints: (row as any).endpoints || {
+			t2i: "/images/generations",
+			i2i: "/images/edits",
+			edit: "/images/edits",
+		},
 	};
 };
 

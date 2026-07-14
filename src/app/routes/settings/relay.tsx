@@ -27,8 +27,13 @@ export const Route = createFileRoute("/settings/relay")({
 type RelayModelForm = {
 	id: string;
 	name: string;
-	ability: "t2i" | "i2i";
 	maxInputImages: number;
+};
+
+type EndpointsForm = {
+	t2i: string;
+	i2i: string;
+	edit: string;
 };
 
 type RelayForm = {
@@ -36,10 +41,16 @@ type RelayForm = {
 	type: RelayProtocol;
 	baseURL: string;
 	apiKey: string;
-	/** OpenAI-compatible API style */
-	apiMode: "auto" | "images" | "responses";
+	apiMode: "endpoints" | "auto" | "images" | "responses";
+	endpoints: EndpointsForm;
 	enabled: boolean;
 	models: RelayModelForm[];
+};
+
+const defaultEndpoints: EndpointsForm = {
+	t2i: "/images/generations",
+	i2i: "/images/edits",
+	edit: "/images/edits",
 };
 
 const emptyForm: RelayForm = {
@@ -47,9 +58,10 @@ const emptyForm: RelayForm = {
 	type: "openai",
 	baseURL: "",
 	apiKey: "",
-	apiMode: "auto",
+	apiMode: "endpoints",
+	endpoints: { ...defaultEndpoints },
 	enabled: true,
-	models: [{ id: "", name: "", ability: "i2i", maxInputImages: 1 }],
+	models: [{ id: "", name: "", maxInputImages: 4 }],
 };
 
 function RelaySettingsPage() {
@@ -79,16 +91,30 @@ function RelaySettingsPage() {
 	const openEdit = async (id: string) => {
 		try {
 			const detail = await relayService.getRelayById({ id });
+			const ep = (detail.endpoints as EndpointsForm) || defaultEndpoints;
 			setEditingId(id);
 			setForm({
 				name: detail.name,
 				type: detail.type as RelayProtocol,
 				baseURL: detail.baseURL,
 				apiKey: detail.apiKey,
-				apiMode: (detail.apiMode as RelayForm["apiMode"]) || "auto",
+				apiMode: (detail.apiMode as RelayForm["apiMode"]) || "endpoints",
+				endpoints: {
+					t2i: ep.t2i || defaultEndpoints.t2i,
+					i2i: ep.i2i || defaultEndpoints.i2i,
+					edit: ep.edit || defaultEndpoints.edit,
+				},
 				enabled: detail.enabled,
-				models: (detail.models as RelayModelForm[]).length
-					? (detail.models as RelayModelForm[])
+				models: ((detail.models as any[]) || []).map((m) => ({
+					id: m.id,
+					name: m.name,
+					maxInputImages: m.maxInputImages || 4,
+				})).length
+					? ((detail.models as any[]) || []).map((m) => ({
+							id: m.id,
+							name: m.name,
+							maxInputImages: m.maxInputImages || 4,
+						}))
 					: emptyForm.models,
 			});
 			setBulkText("");
@@ -109,30 +135,33 @@ function RelaySettingsPage() {
 			toast({ title: t("common.error"), description: t("settings.relay.needModel"), variant: "destructive" });
 			return;
 		}
+		if (form.type === "openai") {
+			if (!form.endpoints.t2i.trim() || !form.endpoints.i2i.trim() || !form.endpoints.edit.trim()) {
+				toast({ title: t("common.error"), description: t("settings.relay.needEndpoints"), variant: "destructive" });
+				return;
+			}
+		}
 
 		setSaving(true);
 		try {
+			const payload = {
+				name: form.name,
+				type: form.type,
+				baseURL: form.baseURL,
+				apiKey: form.apiKey,
+				apiMode: form.apiMode,
+				endpoints: form.endpoints,
+				enabled: form.enabled,
+				models: models.map((m) => ({
+					id: m.id,
+					name: m.name,
+					maxInputImages: m.maxInputImages,
+				})),
+			};
 			if (editingId) {
-				await relayService.updateRelay({
-					id: editingId,
-					name: form.name,
-					type: form.type,
-					baseURL: form.baseURL,
-					apiKey: form.apiKey,
-					apiMode: form.apiMode,
-					enabled: form.enabled,
-					models,
-				});
+				await relayService.updateRelay({ id: editingId, ...payload });
 			} else {
-				await relayService.createRelay({
-					name: form.name,
-					type: form.type,
-					baseURL: form.baseURL,
-					apiKey: form.apiKey,
-					apiMode: form.apiMode,
-					enabled: form.enabled,
-					models,
-				});
+				await relayService.createRelay(payload);
 			}
 			await mutateRelays();
 			await mutate("ai-providers-with-models");
@@ -182,8 +211,7 @@ function RelaySettingsPage() {
 			existing.set(m.id, {
 				id: m.id,
 				name: m.name || m.id,
-				ability: m.ability || "t2i",
-				maxInputImages: m.maxInputImages || 1,
+				maxInputImages: m.maxInputImages || 4,
 			});
 		}
 		const next = Array.from(existing.values());
@@ -223,8 +251,7 @@ function RelaySettingsPage() {
 					result.models.map((m) => ({
 						id: m.id,
 						name: m.name || m.id,
-						ability: (m.ability as "t2i" | "i2i") || "t2i",
-						maxInputImages: m.maxInputImages || 1,
+						maxInputImages: m.maxInputImages || 4,
 					})),
 					result.baseURL,
 				);
@@ -233,7 +260,6 @@ function RelaySettingsPage() {
 					description: t("settings.relay.importedModels", { count }),
 				});
 			} else if (importModels && !result.models?.length) {
-				// Typical for Chinese relays: /models only lists chat models
 				toast({
 					title: t("settings.relay.probeOk"),
 					description: t("settings.relay.noImageModelsHint", {
@@ -258,8 +284,7 @@ function RelaySettingsPage() {
 			list.map((m) => ({
 				id: m.id,
 				name: m.name,
-				ability: (m.ability as "t2i" | "i2i") || "t2i",
-				maxInputImages: m.maxInputImages || 1,
+				maxInputImages: m.maxInputImages || 4,
 			})),
 		);
 		toast({
@@ -281,19 +306,10 @@ function RelaySettingsPage() {
 			const id = idPart || "";
 			if (!id || seen.has(id)) continue;
 			seen.add(id);
-			next.push({
-				id,
-				name: namePart || id,
-				ability: /edit|i2i|img2img|kontext|image/i.test(id) ? "i2i" : "t2i",
-				maxInputImages: /edit|i2i|img2img|kontext|image/i.test(id) ? 3 : 1,
-			});
+			next.push({ id, name: namePart || id, maxInputImages: 4 });
 		}
 		if (!next.length) return;
-		setForm((p) => {
-			const map = new Map(p.models.filter((m) => m.id).map((m) => [m.id, m]));
-			for (const m of next) map.set(m.id, m);
-			return { ...p, models: Array.from(map.values()) };
-		});
+		mergeModelsIntoForm(next);
 		setShowBulk(false);
 		toast({ title: t("common.success"), description: t("settings.relay.importedModels", { count: next.length }) });
 	};
@@ -328,49 +344,62 @@ function RelaySettingsPage() {
 					</div>
 				) : (
 					<div className="space-y-3">
-						{relays.map((relay) => (
-							<div
-								key={relay.id}
-								className="flex flex-col gap-3 rounded-xl border bg-card/60 p-4 sm:flex-row sm:items-center sm:justify-between"
-							>
-								<div className="min-w-0 space-y-1">
-									<div className="flex flex-wrap items-center gap-2">
-										<span className="font-medium">{relay.name}</span>
-										<Badge variant="secondary">{relay.type === "openai" ? "OpenAI" : "Google"}</Badge>
-										{!relay.enabled && <Badge variant="outline">{t("settings.provider.disabled")}</Badge>}
-									</div>
-									<p className="truncate font-mono text-muted-foreground text-xs">{relay.baseURL}</p>
-									<p className="text-muted-foreground text-xs">
-										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })}
-										{relay.type === "openai" ? ` · ${relay.apiMode || "auto"}` : ""} · API Key:{" "}
-										{relay.apiKey}
-									</p>
-									{!!relay.models?.length && (
-										<div className="flex flex-wrap gap-1 pt-1">
-											{(relay.models as RelayModelForm[]).slice(0, 12).map((m) => (
-												<Badge key={m.id} variant="outline" className="max-w-[140px] truncate font-normal text-[10px]">
-													{m.name || m.id}
-												</Badge>
-											))}
-											{(relay.models?.length || 0) > 12 && (
-												<Badge variant="outline" className="text-[10px]">
-													+{(relay.models?.length || 0) - 12}
-												</Badge>
+						{relays.map((relay) => {
+							const ep = (relay as any).endpoints || defaultEndpoints;
+							return (
+								<div
+									key={relay.id}
+									className="flex flex-col gap-3 rounded-xl border bg-card/60 p-4 sm:flex-row sm:items-center sm:justify-between"
+								>
+									<div className="min-w-0 space-y-1">
+										<div className="flex flex-wrap items-center gap-2">
+											<span className="font-medium">{relay.name}</span>
+											<Badge variant="secondary">{relay.type === "openai" ? "OpenAI" : "Google"}</Badge>
+											{!relay.enabled && (
+												<Badge variant="outline">{t("settings.provider.disabled")}</Badge>
 											)}
 										</div>
-									)}
+										<p className="truncate font-mono text-muted-foreground text-xs">{relay.baseURL}</p>
+										{relay.type === "openai" && (
+											<p className="truncate font-mono text-[10px] text-muted-foreground/80">
+												t2i:{ep.t2i} · i2i:{ep.i2i} · edit:{ep.edit}
+											</p>
+										)}
+										<p className="text-muted-foreground text-xs">
+											{t("settings.relay.modelCount", { count: relay.models?.length || 0 })} · API Key:{" "}
+											{relay.apiKey}
+										</p>
+										{!!relay.models?.length && (
+											<div className="flex flex-wrap gap-1 pt-1">
+												{(relay.models as RelayModelForm[]).slice(0, 12).map((m) => (
+													<Badge
+														key={m.id}
+														variant="outline"
+														className="max-w-[140px] truncate font-normal text-[10px]"
+													>
+														{m.name || m.id}
+													</Badge>
+												))}
+												{(relay.models?.length || 0) > 12 && (
+													<Badge variant="outline" className="text-[10px]">
+														+{(relay.models?.length || 0) - 12}
+													</Badge>
+												)}
+											</div>
+										)}
+									</div>
+									<div className="flex items-center gap-2">
+										<Switch checked={relay.enabled} onCheckedChange={(v) => handleToggle(relay.id, v)} />
+										<Button variant="outline" size="sm" onClick={() => openEdit(relay.id)}>
+											{t("common.edit")}
+										</Button>
+										<Button variant="ghost" size="icon" onClick={() => handleDelete(relay.id)}>
+											<Trash2 className="h-4 w-4 text-destructive" />
+										</Button>
+									</div>
 								</div>
-								<div className="flex items-center gap-2">
-									<Switch checked={relay.enabled} onCheckedChange={(v) => handleToggle(relay.id, v)} />
-									<Button variant="outline" size="sm" onClick={() => openEdit(relay.id)}>
-										{t("common.edit")}
-									</Button>
-									<Button variant="ghost" size="icon" onClick={() => handleDelete(relay.id)}>
-										<Trash2 className="h-4 w-4 text-destructive" />
-									</Button>
-								</div>
-							</div>
-						))}
+							);
+						})}
 					</div>
 				)}
 			</div>
@@ -427,25 +456,61 @@ function RelaySettingsPage() {
 							/>
 						</div>
 
+						{/* Three API paths — core of OpenAI-compatible image relays */}
 						{form.type === "openai" && (
-							<div className="space-y-2">
-								<Label>{t("settings.relay.apiMode")}</Label>
-								<Select
-									value={form.apiMode}
-									onValueChange={(v) =>
-										setForm((p) => ({ ...p, apiMode: v as RelayForm["apiMode"] }))
-									}
-								>
-									<SelectTrigger>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="auto">{t("settings.relay.apiModeAuto")}</SelectItem>
-										<SelectItem value="images">{t("settings.relay.apiModeImages")}</SelectItem>
-										<SelectItem value="responses">{t("settings.relay.apiModeResponses")}</SelectItem>
-									</SelectContent>
-								</Select>
-								<p className="text-muted-foreground text-xs">{t("settings.relay.apiModeHint")}</p>
+							<div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+								<div>
+									<p className="font-medium text-sm">{t("settings.relay.endpointsTitle")}</p>
+									<p className="text-muted-foreground text-xs">{t("settings.relay.endpointsHint")}</p>
+								</div>
+								<div className="space-y-1">
+									<Label className="text-xs">{t("settings.relay.pathT2i")}</Label>
+									<Input
+										className="font-mono text-xs"
+										value={form.endpoints.t2i}
+										onChange={(e) =>
+											setForm((p) => ({
+												...p,
+												endpoints: { ...p.endpoints, t2i: e.target.value },
+												apiMode: "endpoints",
+											}))
+										}
+										placeholder="/images/generations"
+									/>
+									<p className="text-[10px] text-muted-foreground">{t("settings.relay.pathT2iDesc")}</p>
+								</div>
+								<div className="space-y-1">
+									<Label className="text-xs">{t("settings.relay.pathI2i")}</Label>
+									<Input
+										className="font-mono text-xs"
+										value={form.endpoints.i2i}
+										onChange={(e) =>
+											setForm((p) => ({
+												...p,
+												endpoints: { ...p.endpoints, i2i: e.target.value },
+												apiMode: "endpoints",
+											}))
+										}
+										placeholder="/images/edits"
+									/>
+									<p className="text-[10px] text-muted-foreground">{t("settings.relay.pathI2iDesc")}</p>
+								</div>
+								<div className="space-y-1">
+									<Label className="text-xs">{t("settings.relay.pathEdit")}</Label>
+									<Input
+										className="font-mono text-xs"
+										value={form.endpoints.edit}
+										onChange={(e) =>
+											setForm((p) => ({
+												...p,
+												endpoints: { ...p.endpoints, edit: e.target.value },
+												apiMode: "endpoints",
+											}))
+										}
+										placeholder="/images/edits"
+									/>
+									<p className="text-[10px] text-muted-foreground">{t("settings.relay.pathEditDesc")}</p>
+								</div>
 							</div>
 						)}
 
@@ -474,7 +539,7 @@ function RelaySettingsPage() {
 								<Textarea
 									value={bulkText}
 									onChange={(e) => setBulkText(e.target.value)}
-									placeholder={"gpt-image-1|GPT Image 1\ndall-e-3\nflux-kontext-pro"}
+									placeholder={"gpt-image-1|GPT Image 1\ndall-e-3"}
 									rows={5}
 									className="font-mono text-xs"
 								/>
@@ -497,43 +562,22 @@ function RelaySettingsPage() {
 										{form.models.filter((m) => m.id.trim()).length}
 									</Badge>
 								</div>
-								<div className="flex gap-1">
-									{form.models.some((m) => m.id.trim()) && (
-										<Button
-											type="button"
-											variant="ghost"
-											size="sm"
-											className="text-destructive"
-											onClick={() => {
-												if (confirm(t("settings.relay.clearModelsConfirm"))) {
-													setForm((p) => ({
-														...p,
-														models: [{ id: "", name: "", ability: "i2i", maxInputImages: 1 }],
-													}));
-												}
-											}}
-										>
-											{t("settings.relay.clearModels")}
-										</Button>
-									)}
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										onClick={() =>
-											setForm((p) => ({
-												...p,
-												models: [...p.models, { id: "", name: "", ability: "i2i", maxInputImages: 1 }],
-											}))
-										}
-									>
-										<Plus className="mr-1 h-3 w-3" />
-										{t("settings.relay.addModel")}
-									</Button>
-								</div>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onClick={() =>
+										setForm((p) => ({
+											...p,
+											models: [...p.models, { id: "", name: "", maxInputImages: 4 }],
+										}))
+									}
+								>
+									<Plus className="mr-1 h-3 w-3" />
+									{t("settings.relay.addModel")}
+								</Button>
 							</div>
 
-							{/* Compact summary chips when many models */}
 							{form.models.filter((m) => m.id.trim()).length > 0 && (
 								<div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
 									{form.models
@@ -543,10 +587,9 @@ function RelaySettingsPage() {
 												key={m.id}
 												variant="outline"
 												className="max-w-[160px] truncate font-normal text-[10px]"
-												title={`${m.id} (${m.ability})`}
+												title={m.id}
 											>
 												{m.name || m.id}
-												<span className="ml-1 opacity-60">{m.ability}</span>
 											</Badge>
 										))}
 								</div>
@@ -579,34 +622,17 @@ function RelaySettingsPage() {
 												/>
 											</div>
 										</div>
-										<div className="grid grid-cols-2 gap-2">
-											<div className="space-y-1">
-												<Label className="text-xs">{t("settings.relay.ability")}</Label>
-												<Select
-													value={model.ability}
-													onValueChange={(v) => updateModel(index, { ability: v as "t2i" | "i2i" })}
-												>
-													<SelectTrigger>
-														<SelectValue />
-													</SelectTrigger>
-													<SelectContent>
-														<SelectItem value="t2i">T2I · 文生图</SelectItem>
-														<SelectItem value="i2i">I2I · 图生图</SelectItem>
-													</SelectContent>
-												</Select>
-											</div>
-											<div className="space-y-1">
-												<Label className="text-xs">{t("settings.relay.maxImages")}</Label>
-												<Input
-													type="number"
-													min={1}
-													max={10}
-													value={model.maxInputImages}
-													onChange={(e) =>
-														updateModel(index, { maxInputImages: Number(e.target.value) || 1 })
-													}
-												/>
-											</div>
+										<div className="space-y-1">
+											<Label className="text-xs">{t("settings.relay.maxImages")}</Label>
+											<Input
+												type="number"
+												min={1}
+												max={16}
+												value={model.maxInputImages}
+												onChange={(e) =>
+													updateModel(index, { maxInputImages: Number(e.target.value) || 4 })
+												}
+											/>
 										</div>
 										{form.models.length > 1 && (
 											<Button

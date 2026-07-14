@@ -1,34 +1,32 @@
 import type { TypixChatApiResponse, TypixGenerateRequest } from "../types/api";
 import Google from "./google";
 import OpenAI from "./openai";
+import {
+	type RelayEndpoints,
+	generateViaEndpointPaths,
+	normalizeEndpoints,
+} from "./relay-endpoints";
 import { normalizeGoogleBaseURL, normalizeOpenAIBaseURL } from "./relay-presets";
 import { generateImageViaResponsesApi } from "./responses-image";
 
-export type RelayApiMode = "auto" | "images" | "responses";
+export type RelayApiMode = "auto" | "images" | "responses" | "endpoints";
 
 export interface RelayConfig {
 	type: "openai" | "google";
 	baseURL: string;
 	apiKey: string;
 	modelId: string;
-	/**
-	 * OpenAI-compatible only:
-	 * - images: /v1/images/generations|edits (classic)
-	 * - responses: /v1/responses + image_generation tool
-	 * - auto: try responses first for gpt-image-like models, else images; fallback the other way on failure
-	 */
 	apiMode?: RelayApiMode;
-}
-
-function prefersResponsesApi(modelId: string, apiMode?: RelayApiMode): boolean {
-	if (apiMode === "responses") return true;
-	if (apiMode === "images") return false;
-	// auto
-	return /gpt-image|chatgpt-image|image-1|o3|o4|gpt-4o/i.test(modelId);
+	/** Custom paths: 文生图 / 图生图 / 编辑图片 */
+	endpoints?: Partial<RelayEndpoints> | null;
 }
 
 /**
- * Generate images via a user-defined relay station.
+ * Generate images via user relay.
+ * OpenAI-compatible routing (no per-model t2i/i2i flag):
+ * - no reference images → endpoints.t2i (文生图)
+ * - has reference images → endpoints.i2i (图生图)
+ * - edit path used as fallback if i2i fails and path differs
  */
 export async function generateViaRelay(
 	request: TypixGenerateRequest,
@@ -37,27 +35,32 @@ export async function generateViaRelay(
 	const modelId = relay.modelId || request.modelId;
 
 	if (relay.type === "google") {
-		const settings = {
-			apiKey: relay.apiKey,
-			baseURL: normalizeGoogleBaseURL(relay.baseURL),
-		};
 		return await Google.generate(
 			{ ...request, modelId, providerId: "google" },
-			settings,
+			{ apiKey: relay.apiKey, baseURL: normalizeGoogleBaseURL(relay.baseURL) },
 		);
 	}
 
-	// OpenAI-compatible relay
 	const baseURL = normalizeOpenAIBaseURL(relay.baseURL);
-	const useResponses = prefersResponsesApi(modelId, relay.apiMode);
+	const mode = relay.apiMode || "endpoints";
+	const endpoints = normalizeEndpoints(relay.endpoints);
 
-	const viaImages = async () =>
+	const viaEndpoints = () =>
+		generateViaEndpointPaths({
+			baseURL,
+			apiKey: relay.apiKey,
+			model: modelId,
+			request: { ...request, modelId },
+			endpoints,
+		});
+
+	const viaImagesSdk = () =>
 		OpenAI.generate(
 			{ ...request, modelId, providerId: "openai" },
 			{ apiKey: relay.apiKey, baseURL, model: modelId },
 		);
 
-	const viaResponses = async () =>
+	const viaResponses = () =>
 		generateImageViaResponsesApi({
 			baseURL,
 			apiKey: relay.apiKey,
@@ -65,28 +68,35 @@ export async function generateViaRelay(
 			request: { ...request, modelId },
 		});
 
-	if (relay.apiMode === "images") {
-		return await viaImages();
+	if (mode === "endpoints") {
+		return await viaEndpoints();
 	}
-	if (relay.apiMode === "responses") {
+	if (mode === "images") {
+		return await viaImagesSdk();
+	}
+	if (mode === "responses") {
 		return await viaResponses();
 	}
 
-	// auto: primary then fallback
-	const primary = useResponses ? viaResponses : viaImages;
-	const fallback = useResponses ? viaImages : viaResponses;
+	// auto: endpoints first (path-based), then responses for gpt-image, then images SDK
+	const hasImages = !!(request.images && request.images.length > 0);
+	const tryOrder = hasImages
+		? [viaEndpoints, viaResponses, viaImagesSdk]
+		: /gpt-image|image-1/i.test(modelId)
+			? [viaResponses, viaEndpoints, viaImagesSdk]
+			: [viaEndpoints, viaImagesSdk, viaResponses];
 
-	try {
-		const result = await primary();
-		if (result.images?.length) return result;
-		// empty images without hard error → try fallback
-		const fb = await fallback();
-		return fb.images?.length ? fb : result;
-	} catch (e) {
+	let last: TypixChatApiResponse = { images: [] };
+	let lastErr: unknown;
+	for (const fn of tryOrder) {
 		try {
-			return await fallback();
-		} catch {
-			throw e;
+			const r = await fn();
+			if (r.images?.length) return r;
+			last = r;
+		} catch (e) {
+			lastErr = e;
 		}
 	}
+	if (lastErr && !last.images?.length) throw lastErr;
+	return last;
 }
