@@ -7,5 +7,6 @@ export const authClient = createAuthClient({
 /** Convert UI username to the synthetic email used in the database */
 export function usernameToLoginEmail(username: string) {
 	const u = username.trim().toLowerCase();
-	return `${u}@local.image2cf`;
+	// Must pass better-auth/zod email validation
+	return `${u}@users.image2cf.local`;
 }

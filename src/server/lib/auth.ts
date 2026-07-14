@@ -27,9 +27,12 @@ export interface AuthConfig {
 	disableSignUp?: boolean;
 }
 
-/** Map plain username → synthetic email (better-auth requires email field) */
+/**
+ * Map plain username → synthetic email (better-auth requires a valid email).
+ * Domain must pass zod email validation (e.g. @local.image2cf is INVALID).
+ */
 export function usernameToEmail(username: string) {
-	return `${normalizeUsername(username)}@local.image2cf`;
+	return `${normalizeUsername(username)}@users.image2cf.local`;
 }
 
 export function normalizeUsername(value: string) {

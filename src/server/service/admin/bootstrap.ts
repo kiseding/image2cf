@@ -26,7 +26,7 @@ function getD1(env: Record<string, any>): D1Database | null {
 
 /**
  * Create/repair default admin via D1 SQL (most reliable on Workers).
- * Login username: admin  →  email: admin@local.image2cf
+ * Login username: admin  →  email: admin@users.image2cf.local
  */
 export async function bootstrapAdmin(_drizzle: DrizzleDb, env: Record<string, any>) {
 	if (done) return;
@@ -62,12 +62,17 @@ export async function bootstrapAdmin(_drizzle: DrizzleDb, env: Record<string, an
 		const passwordHash = await hashPassword(password);
 		const now = Date.now();
 
+		// Match any known admin row (including legacy invalid synthetic emails)
 		const existing = await d1
 			.prepare(
-				`SELECT id FROM user WHERE email = ? OR username = ? OR role = 'admin' LIMIT 1`,
+				`SELECT id, email FROM user
+         WHERE username = ? OR role = 'admin'
+            OR email = ?
+            OR email LIKE 'admin@%'
+         LIMIT 1`,
 			)
-			.bind(email, ADMIN_USERNAME)
-			.first<{ id: string }>();
+			.bind(ADMIN_USERNAME, email)
+			.first<{ id: string; email: string }>();
 
 		let userId = existing?.id;
 		if (!userId) {
@@ -79,8 +84,9 @@ export async function bootstrapAdmin(_drizzle: DrizzleDb, env: Record<string, an
 				)
 				.bind(userId, name, email, ADMIN_USERNAME, name, now, now)
 				.run();
-			console.log(`[image2cf] inserted admin user id=${userId}`);
+			console.log(`[image2cf] inserted admin user id=${userId} email=${email}`);
 		} else {
+			// Always rewrite email to the current valid synthetic address
 			await d1
 				.prepare(
 					`UPDATE user SET name = ?, email = ?, email_verified = 1, username = ?, display_username = ?, role = 'admin', banned = 0, updated_at = ?
@@ -88,7 +94,9 @@ export async function bootstrapAdmin(_drizzle: DrizzleDb, env: Record<string, an
 				)
 				.bind(name, email, ADMIN_USERNAME, name, now, userId)
 				.run();
-			console.log(`[image2cf] updated admin user id=${userId}`);
+			console.log(
+				`[image2cf] updated admin user id=${userId} email=${email} (was ${existing?.email || "?"})`,
+			);
 		}
 
 		// credential account
