@@ -2,64 +2,43 @@ import type { DrizzleDb } from "@/server/db";
 import { account, user } from "@/server/db/schemas";
 import { usernameToEmail } from "@/server/lib/auth";
 import { hashPassword } from "@/server/lib/password";
-import { eq } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 const ADMIN_USERNAME = "admin";
 
-// Once per Worker isolate / Node process
 let bootstrapped = false;
 
 /**
  * Ensure default admin exists.
- * Username is always "admin". Password comes from ADMIN_PASSWORD.
- * Password is always synced from ADMIN_PASSWORD so login never drifts.
+ * Username is always "admin". Password from ADMIN_PASSWORD.
+ * Login uses synthetic email admin@local.image2cf under the hood.
  */
 export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
 	if (bootstrapped) return;
-	const password = env.ADMIN_PASSWORD as string | undefined;
+
+	const password = pickPassword(env);
 	if (!password) {
-		console.log("[image2cf] Skip admin bootstrap: ADMIN_PASSWORD not set");
+		console.log("[image2cf] Skip admin bootstrap: ADMIN_PASSWORD not set on env");
 		return;
 	}
 
 	const username = ADMIN_USERNAME;
-	const name = (env.ADMIN_NAME as string) || "Admin";
+	const name = String(env.ADMIN_NAME || "Admin");
 	const email = usernameToEmail(username);
 
 	try {
-		let admin = await db.query.user.findFirst({
-			where: eq(user.username, username),
-		});
+		// Find existing admin by username OR synthetic email OR role=admin
+		let admin =
+			(await db.query.user.findFirst({ where: eq(user.username, username) })) ||
+			(await db.query.user.findFirst({ where: eq(user.email, email) })) ||
+			(await db.query.user.findFirst({ where: eq(user.role, "admin") }));
 
-		// Legacy users without username field
-		if (!admin) {
-			const byEmail = await db.query.user.findFirst({
-				where: eq(user.email, email),
-			});
-			if (byEmail) {
-				await db
-					.update(user)
-					.set({
-						username,
-						displayUsername: name,
-						name: byEmail.name || name,
-						role: "admin",
-						emailVerified: true,
-						banned: false,
-						updatedAt: new Date(),
-					})
-					.where(eq(user.id, byEmail.id));
-				admin = { ...byEmail, username, role: "admin" } as any;
-				console.log("[image2cf] Backfilled username for admin");
-			}
-		}
+		const passwordHash = await hashPassword(password);
+		const now = new Date();
 
 		if (!admin) {
 			const userId = nanoid();
-			const now = new Date();
-			const passwordHash = await hashPassword(password);
-
 			await db.insert(user).values({
 				id: userId,
 				name,
@@ -72,7 +51,6 @@ export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
 				createdAt: now,
 				updatedAt: now,
 			});
-
 			await db.insert(account).values({
 				id: nanoid(),
 				accountId: userId,
@@ -82,48 +60,59 @@ export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
 				createdAt: now,
 				updatedAt: now,
 			});
-
-			console.log(`[image2cf] Created admin user "${username}"`);
+			console.log(`[image2cf] Created admin user="${username}" email="${email}"`);
 			bootstrapped = true;
 			return;
 		}
 
-		// Ensure role / not banned / username set
+		// Repair fields for existing admin
 		await db
 			.update(user)
 			.set({
 				username,
+				displayUsername: name,
+				email,
+				emailVerified: true,
 				role: "admin",
 				banned: false,
-				emailVerified: true,
-				updatedAt: new Date(),
+				updatedAt: now,
 			})
 			.where(eq(user.id, admin.id));
 
-		// Always sync password from env so ADMIN_PASSWORD is the source of truth
-		await resetCredentialPassword(db, admin.id, password);
-		console.log(`[image2cf] Admin ready: username="${username}" (password synced from ADMIN_PASSWORD)`);
+		await upsertCredential(db, admin.id, passwordHash, now);
+		console.log(
+			`[image2cf] Admin ready user="${username}" email="${email}" id=${admin.id} (password synced)`,
+		);
 		bootstrapped = true;
 	} catch (e) {
 		console.error("[image2cf] Failed to bootstrap admin:", e);
+		// Try raw SQL fallback for D1 edge cases
+		try {
+			await rawSqlBootstrap(db, password, name, email, username);
+			bootstrapped = true;
+			console.log("[image2cf] Admin bootstrap via raw SQL succeeded");
+		} catch (e2) {
+			console.error("[image2cf] Raw SQL bootstrap also failed:", e2);
+		}
 	}
 }
 
-async function resetCredentialPassword(db: DrizzleDb, userId: string, password: string) {
-	const passwordHash = await hashPassword(password);
-	const now = new Date();
-	const existingAccount = await db.query.account.findFirst({
+function pickPassword(env: Record<string, any>): string | undefined {
+	const v = env.ADMIN_PASSWORD ?? env.admin_password;
+	if (v === undefined || v === null) return undefined;
+	const s = String(v).trim();
+	return s || undefined;
+}
+
+async function upsertCredential(db: DrizzleDb, userId: string, passwordHash: string, now: Date) {
+	const existing = await db.query.account.findFirst({
 		where: eq(account.userId, userId),
 	});
-	if (existingAccount) {
+	if (existing) {
 		await db
 			.update(account)
-			.set({
-				password: passwordHash,
-				providerId: "credential",
-				updatedAt: now,
-			})
-			.where(eq(account.id, existingAccount.id));
+			.set({ password: passwordHash, providerId: "credential", updatedAt: now })
+			.where(eq(account.id, existing.id));
 	} else {
 		await db.insert(account).values({
 			id: nanoid(),
@@ -135,4 +124,40 @@ async function resetCredentialPassword(db: DrizzleDb, userId: string, password: 
 			updatedAt: now,
 		});
 	}
+}
+
+async function rawSqlBootstrap(
+	db: DrizzleDb,
+	password: string,
+	name: string,
+	email: string,
+	username: string,
+) {
+	const passwordHash = await hashPassword(password);
+	const userId = nanoid();
+	const accountId = nanoid();
+	const now = Date.now();
+
+	// D1 / sqlite: insert or ignore then update
+	await db.run(
+		sql`INSERT OR IGNORE INTO user (id, name, email, email_verified, image, username, display_username, role, banned, created_at, updated_at)
+		VALUES (${userId}, ${name}, ${email}, 1, null, ${username}, ${name}, 'admin', 0, ${now}, ${now})`,
+	);
+	await db.run(
+		sql`UPDATE user SET username=${username}, email=${email}, email_verified=1, role='admin', banned=0, updated_at=${now}
+		WHERE email=${email} OR username=${username}`,
+	);
+
+	const rows = await db.all<{ id: string }>(
+		sql`SELECT id FROM user WHERE username=${username} OR email=${email} LIMIT 1`,
+	);
+	const uid = rows?.[0]?.id || userId;
+
+	await db.run(
+		sql`DELETE FROM account WHERE user_id=${uid} AND provider_id='credential'`,
+	);
+	await db.run(
+		sql`INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at)
+		VALUES (${accountId}, ${uid}, 'credential', ${uid}, ${passwordHash}, ${now}, ${now})`,
+	);
 }

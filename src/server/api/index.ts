@@ -60,8 +60,8 @@ const factory = createFactory<Env>({
 				providerCloudflareBuiltin: c.env.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
 			});
 
-			// Always try bootstrap/repair admin (idempotent). Force password reset when ADMIN_FORCE_RESET=true.
-			await bootstrapAdmin(db, e as any);
+			// Bootstrap admin from bindings (c.env) + adapter env
+			await bootstrapAdmin(db, { ...(e as any), ...(c.env as any) });
 			await next();
 		});
 	},

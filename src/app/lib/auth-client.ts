@@ -1,7 +1,11 @@
-import { usernameClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 
 export const authClient = createAuthClient({
 	baseURL: "",
-	plugins: [usernameClient()],
 });
+
+/** Convert UI username to the synthetic email used in the database */
+export function usernameToLoginEmail(username: string) {
+	const u = username.trim().toLowerCase();
+	return `${u}@local.image2cf`;
+}

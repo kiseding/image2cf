@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
-import { username } from "better-auth/plugins";
+import * as schema from "@/server/db/schemas";
 
 export interface AuthConfig {
 	email: {
@@ -27,9 +27,9 @@ export interface AuthConfig {
 	disableSignUp?: boolean;
 }
 
-/** Synthetic email for better-auth required email field */
+/** Map plain username → synthetic email (better-auth requires email field) */
 export function usernameToEmail(username: string) {
-	return `${username.toLowerCase()}@local.image2cf`;
+	return `${normalizeUsername(username)}@local.image2cf`;
 }
 
 export function normalizeUsername(value: string) {
@@ -40,9 +40,27 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 	betterAuth({
 		database: drizzleAdapter(db, {
 			provider: "sqlite",
+			schema: {
+				user: schema.user,
+				session: schema.session,
+				account: schema.account,
+				verification: schema.verification,
+			},
 		}),
 		user: {
 			additionalFields: {
+				username: {
+					type: "string" as const,
+					required: false,
+					input: false,
+					returned: true,
+				},
+				displayUsername: {
+					type: "string" as const,
+					required: false,
+					input: false,
+					returned: true,
+				},
 				role: {
 					type: "string" as const,
 					required: false,
@@ -73,7 +91,6 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 			enabled: true,
 			disableSignUp: config?.disableSignUp !== false,
 			requireEmailVerification: false,
-			// Use better-auth default scrypt (works on Cloudflare Workers)
 		},
 		databaseHooks: {
 			session: {
@@ -92,18 +109,8 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 				},
 			},
 		},
-		plugins: [
-			username({
-				minUsernameLength: 2,
-				maxUsernameLength: 32,
-				usernameNormalization: (u) => normalizeUsername(u),
-				validationOrder: {
-					username: "pre-normalization",
-					displayUsername: "pre-normalization",
-				},
-				usernameValidator: (value) => /^[a-zA-Z0-9_.-]+$/.test(value),
-			}),
-		],
+		// No username plugin — login uses synthetic email under the hood (more reliable on D1)
+		plugins: [],
 		socialProviders: {
 			google:
 				config?.social.google.enabled === true

@@ -3,14 +3,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
 import { useAuth } from "@/app/hooks/useAuth";
-import { authClient } from "@/app/lib/auth-client";
+import { authClient, usernameToLoginEmail } from "@/app/lib/auth-client";
 import { useUIStore } from "@/app/stores";
 import { AlertCircle, Eye, EyeOff, Lock, User } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 interface LoginModalProps {
-	/** When true, modal cannot be dismissed until logged in */
 	forceOpen?: boolean;
 }
 
@@ -54,16 +53,19 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 		setError(null);
 
 		try {
-			const response = await authClient.signIn.username({
-				username: formData.username.trim(),
+			// UI: username. Backend: better-auth email/password with synthetic email
+			const email = usernameToLoginEmail(formData.username);
+			const response = await authClient.signIn.email({
+				email,
 				password: formData.password,
 			});
 
 			if (response.error) {
 				const errorCode = response.error.code;
 				switch (errorCode) {
-					case "INVALID_USERNAME_OR_PASSWORD":
+					case "INVALID_EMAIL":
 					case "INVALID_EMAIL_OR_PASSWORD":
+					case "INVALID_USERNAME_OR_PASSWORD":
 						setError(t("auth.invalidUsernameOrPassword"));
 						break;
 					case "USER_BANNED":
