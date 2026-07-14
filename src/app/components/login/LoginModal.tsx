@@ -3,8 +3,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/app/components/ui/input";
 import { Label } from "@/app/components/ui/label";
 import { useAuth } from "@/app/hooks/useAuth";
+import { authClient } from "@/app/lib/auth-client";
 import { useUIStore } from "@/app/stores";
-import { AlertCircle, Eye, EyeOff, Lock, Mail } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Lock, User } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -15,7 +16,7 @@ interface LoginModalProps {
 
 export function LoginModal({ forceOpen = false }: LoginModalProps) {
 	const { isLoginModalOpen, closeLoginModal, openLoginModal } = useUIStore();
-	const { signIn, isLogin, user } = useAuth();
+	const { isLogin, user } = useAuth();
 	const { t } = useTranslation();
 	const open = forceOpen || isLoginModalOpen;
 
@@ -23,12 +24,12 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [formData, setFormData] = useState({
-		email: "",
+		username: "",
 		password: "",
 	});
 
 	const resetAllState = () => {
-		setFormData({ email: "", password: "" });
+		setFormData({ username: "", password: "" });
 		setShowPassword(false);
 		setError(null);
 		setIsLoading(false);
@@ -53,19 +54,17 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 		setError(null);
 
 		try {
-			const response = await signIn.email({
-				email: formData.email,
+			const response = await authClient.signIn.username({
+				username: formData.username.trim(),
 				password: formData.password,
 			});
 
 			if (response.error) {
 				const errorCode = response.error.code;
 				switch (errorCode) {
-					case "INVALID_EMAIL":
-						setError(t("auth.invalidEmail"));
-						break;
+					case "INVALID_USERNAME_OR_PASSWORD":
 					case "INVALID_EMAIL_OR_PASSWORD":
-						setError(t("auth.invalidEmailOrPassword"));
+						setError(t("auth.invalidUsernameOrPassword"));
 						break;
 					case "USER_BANNED":
 					case "FORBIDDEN":
@@ -88,7 +87,6 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 	};
 
 	const handleClose = (nextOpen?: boolean) => {
-		// Required login: ignore dismiss attempts
 		if (forceOpen && !isLogin) {
 			openLoginModal();
 			return;
@@ -130,15 +128,16 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 
 				<form onSubmit={handleSubmit} className="space-y-4">
 					<div className="space-y-2">
-						<Label htmlFor="email">{t("auth.email")}</Label>
+						<Label htmlFor="username">{t("auth.username")}</Label>
 						<div className="relative">
-							<Mail className="-translate-y-1/2 absolute top-1/2 left-3 h-4 w-4 text-muted-foreground" />
+							<User className="-translate-y-1/2 absolute top-1/2 left-3 h-4 w-4 text-muted-foreground" />
 							<Input
-								id="email"
-								type="email"
-								placeholder={t("auth.enterEmail")}
-								value={formData.email}
-								onChange={(e) => handleInputChange("email", e.target.value)}
+								id="username"
+								type="text"
+								autoComplete="username"
+								placeholder={t("auth.enterUsername")}
+								value={formData.username}
+								onChange={(e) => handleInputChange("username", e.target.value)}
 								className="pl-10"
 								required
 							/>
@@ -152,6 +151,7 @@ export function LoginModal({ forceOpen = false }: LoginModalProps) {
 							<Input
 								id="password"
 								type={showPassword ? "text" : "password"}
+								autoComplete="current-password"
 								placeholder={t("auth.enterPassword")}
 								value={formData.password}
 								onChange={(e) => handleInputChange("password", e.target.value)}

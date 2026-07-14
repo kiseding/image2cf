@@ -15,6 +15,13 @@
       "when": 1755237790374,
       "tag": "0001_image2cf_multiuser_relay",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1755237790375,
+      "tag": "0002_username_login",
+      "breakpoints": true
     }
   ]
 }

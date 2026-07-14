@@ -1,10 +1,17 @@
 import { account, user } from "@/server/db/schemas";
+import { usernameToEmail } from "@/server/lib/auth";
 import { ServiceException } from "@/server/lib/exception";
 import { scryptSync } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import z from "zod/v4";
 import { type RequestContext, getContext } from "../context";
+
+const UsernameSchema = z
+	.string()
+	.min(2)
+	.max(32)
+	.regex(/^[a-zA-Z0-9_\u4e00-\u9fa5.-]+$/, "Invalid username");
 
 async function hashPassword(password: string) {
 	const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -43,7 +50,7 @@ const listUsers = async (ctx: RequestContext) => {
 	return users.map((u) => ({
 		id: u.id,
 		name: u.name,
-		email: u.email,
+		username: u.username || u.name,
 		role: u.role,
 		banned: u.banned,
 		createdAt: u.createdAt,
@@ -52,10 +59,11 @@ const listUsers = async (ctx: RequestContext) => {
 };
 
 export const CreateUserSchema = z.object({
-	name: z.string().min(1).max(64),
-	email: z.string().email(),
+	username: UsernameSchema,
 	password: z.string().min(6).max(128),
 	role: z.enum(["admin", "user"]).default("user"),
+	// optional display name; defaults to username
+	name: z.string().min(1).max(64).optional(),
 });
 export type CreateUser = z.infer<typeof CreateUserSchema>;
 
@@ -63,22 +71,26 @@ const createUser = async (req: CreateUser, ctx: RequestContext) => {
 	await assertAdmin(ctx);
 	const { db } = getContext();
 
+	const username = req.username.trim();
 	const existing = await db.query.user.findFirst({
-		where: eq(user.email, req.email),
+		where: eq(user.username, username.toLowerCase()),
 	});
 	if (existing) {
-		throw new ServiceException("invalid_parameter", "Email already exists");
+		throw new ServiceException("invalid_parameter", "Username already exists");
 	}
 
 	const userId = nanoid();
 	const now = new Date();
 	const passwordHash = await hashPassword(req.password);
+	const displayName = req.name?.trim() || username;
 
 	await db.insert(user).values({
 		id: userId,
-		name: req.name,
-		email: req.email,
+		name: displayName,
+		email: usernameToEmail(username),
 		emailVerified: true,
+		username: username.toLowerCase(),
+		displayUsername: username,
 		role: req.role,
 		banned: false,
 		createdAt: now,
@@ -209,7 +221,7 @@ const getMe = async (ctx: RequestContext) => {
 	return {
 		id: current.id,
 		name: current.name,
-		email: current.email,
+		username: current.username || current.name,
 		role: current.role,
 		banned: current.banned,
 	};

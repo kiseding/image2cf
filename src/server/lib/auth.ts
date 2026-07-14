@@ -2,6 +2,7 @@ import { scryptSync } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
+import { username } from "better-auth/plugins";
 
 export interface AuthConfig {
 	email: {
@@ -26,6 +27,11 @@ export interface AuthConfig {
 	cookieDomain?: string;
 	// Disable public registration (admin creates users)
 	disableSignUp?: boolean;
+}
+
+/** Synthetic email for better-auth required email field */
+export function usernameToEmail(username: string) {
+	return `${username.toLowerCase()}@local.image2cf`;
 }
 
 export const createAuth = (db: any, config?: AuthConfig) =>
@@ -64,7 +70,7 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 		emailAndPassword: {
 			enabled: true,
 			disableSignUp: config?.disableSignUp !== false,
-			requireEmailVerification: config?.email?.verification === true,
+			requireEmailVerification: false,
 			password: {
 				hash: async (password) => {
 					const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -101,9 +107,6 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 				},
 			},
 		},
-		emailVerification: {
-			autoSignInAfterVerification: true,
-		},
 		databaseHooks: {
 			session: {
 				create: {
@@ -121,7 +124,13 @@ export const createAuth = (db: any, config?: AuthConfig) =>
 				},
 			},
 		},
-		plugins: [],
+		plugins: [
+			username({
+				minUsernameLength: 2,
+				maxUsernameLength: 32,
+				usernameValidator: (value) => /^[a-zA-Z0-9_\u4e00-\u9fa5.-]+$/.test(value),
+			}),
+		],
 		socialProviders: {
 			google:
 				config?.social.google.enabled === true

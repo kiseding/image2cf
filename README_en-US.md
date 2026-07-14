@@ -50,7 +50,7 @@ After first deploy → **Workers → image2cf → Variables and Secrets**:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ADMIN_EMAIL` | ✅ | Bootstrap admin email |
+| `ADMIN_USERNAME` | ✅ | Bootstrap admin username |
 | `ADMIN_PASSWORD` | ✅ | Bootstrap admin password |
 | `ADMIN_NAME` | | Display name |
 
@@ -77,7 +77,7 @@ pnpm install && pnpm build && pnpm deploy
 
 ```bash
 cp .env.node.example .env
-# set DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD, MODE=mixed
+# set DATABASE_URL, ADMIN_USERNAME, ADMIN_PASSWORD, MODE=mixed
 pnpm db:push && pnpm dev
 ```
 

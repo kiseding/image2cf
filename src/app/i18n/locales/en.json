@@ -151,7 +151,7 @@
 		},
 		"users": {
 			"title": "User Management",
-			"description": "Admins create and manage users (no public registration)",
+			"description": "Admins create and manage users (username login, no public registration)",
 			"hint": "Admin only",
 			"add": "Create User",
 			"empty": "No users",
@@ -168,18 +168,18 @@
 			"created": "User created",
 			"deleted": "User deleted",
 			"confirmDelete": "Delete this user?",
-			"fillRequired": "Please fill name, email and password"
+			"fillRequired": "Please fill username and password"
 		}
 	},
 	"auth": {
 		"welcomeBack": "Welcome Back",
 		"createAccount": "Create Account",
-		"loginDescription": "Login to your account to continue",
+		"loginDescription": "Sign in with the account issued by your admin",
 		"registerDescription": "Register a new account to start your creative journey",
 		"username": "Username",
 		"email": "Email",
 		"password": "Password",
-		"enterUsername": "Please enter username",
+		"enterUsername": "Enter username",
 		"enterEmail": "Please enter email address",
 		"enterPassword": "Please enter password",
 		"login": "Login",
@@ -224,7 +224,8 @@
 		"noRegistration": "Public registration is disabled. Contact an admin for an account.",
 		"userBanned": "Your account has been banned. Contact an admin.",
 		"loginRequired": "Sign in required",
-		"loginRequiredDesc": "Guest access is disabled. Accounts are issued by admins only."
+		"loginRequiredDesc": "Guest access is disabled. Accounts are issued by admins only.",
+		"invalidUsernameOrPassword": "Invalid username or password"
 	},
 	"user": {
 		"avatar": "User avatar",

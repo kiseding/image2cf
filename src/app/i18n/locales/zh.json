@@ -151,7 +151,7 @@
 		},
 		"users": {
 			"title": "用户管理",
-			"description": "管理员创建和管理系统用户（不支持自助注册）",
+			"description": "管理员创建和管理系统用户（用户名登录，不支持自助注册）",
 			"hint": "仅管理员可访问此页面",
 			"add": "创建用户",
 			"empty": "暂无用户",
@@ -168,13 +168,13 @@
 			"created": "用户已创建",
 			"deleted": "用户已删除",
 			"confirmDelete": "确认删除该用户？",
-			"fillRequired": "请填写用户名、邮箱和密码"
+			"fillRequired": "请填写用户名和密码"
 		}
 	},
 	"auth": {
 		"welcomeBack": "欢迎回来",
 		"createAccount": "创建账户",
-		"loginDescription": "登录您的账户以继续使用",
+		"loginDescription": "使用管理员分配的账号登录",
 		"registerDescription": "注册新账户开始您的创作之旅",
 		"username": "用户名",
 		"email": "邮箱",
@@ -224,7 +224,8 @@
 		"noRegistration": "本系统不支持公开注册，请联系管理员开通账号",
 		"userBanned": "账号已被禁用，请联系管理员",
 		"loginRequired": "请先登录后使用",
-		"loginRequiredDesc": "本系统不支持访客访问，账号由管理员分配"
+		"loginRequiredDesc": "本系统不支持访客访问，账号由管理员分配",
+		"invalidUsernameOrPassword": "用户名或密码错误"
 	},
 	"user": {
 		"avatar": "用户头像",

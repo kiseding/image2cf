@@ -18,8 +18,7 @@ export const Route = createFileRoute("/settings/users")({
 });
 
 const emptyForm = {
-	name: "",
-	email: "",
+	username: "",
 	password: "",
 	role: "user" as "admin" | "user",
 };
@@ -55,13 +54,17 @@ function UsersSettingsPage() {
 	}
 
 	const handleCreate = async () => {
-		if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
+		if (!form.username.trim() || !form.password.trim()) {
 			toast({ title: t("common.error"), description: t("settings.users.fillRequired"), variant: "destructive" });
 			return;
 		}
 		setSaving(true);
 		try {
-			await adminService.createUser(form);
+			await adminService.createUser({
+				username: form.username.trim(),
+				password: form.password,
+				role: form.role,
+			});
 			await mutate();
 			setDialogOpen(false);
 			setForm(emptyForm);
@@ -144,14 +147,16 @@ function UsersSettingsPage() {
 							>
 								<div className="min-w-0 space-y-1">
 									<div className="flex flex-wrap items-center gap-2">
-										<span className="font-medium">{u.name}</span>
+										<span className="font-medium">{u.username || u.name}</span>
 										<Badge variant={u.role === "admin" ? "default" : "secondary"}>
 											{u.role === "admin" ? t("settings.users.roleAdmin") : t("settings.users.roleUser")}
 										</Badge>
 										{u.banned && <Badge variant="destructive">{t("settings.users.banned")}</Badge>}
 										{u.id === user?.id && <Badge variant="outline">{t("settings.users.you")}</Badge>}
 									</div>
-									<p className="truncate text-muted-foreground text-xs">{u.email}</p>
+									{u.name && u.name !== u.username && (
+										<p className="truncate text-muted-foreground text-xs">{u.name}</p>
+									)}
 								</div>
 								<div className="flex flex-wrap items-center gap-2">
 									<Select
@@ -202,18 +207,10 @@ function UsersSettingsPage() {
 						<div className="space-y-2">
 							<Label>{t("auth.username")}</Label>
 							<Input
-								value={form.name}
-								onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+								value={form.username}
+								onChange={(e) => setForm((p) => ({ ...p, username: e.target.value }))}
 								placeholder={t("auth.enterUsername")}
-							/>
-						</div>
-						<div className="space-y-2">
-							<Label>{t("auth.email")}</Label>
-							<Input
-								type="email"
-								value={form.email}
-								onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
-								placeholder={t("auth.enterEmail")}
+								autoComplete="off"
 							/>
 						</div>
 						<div className="space-y-2">

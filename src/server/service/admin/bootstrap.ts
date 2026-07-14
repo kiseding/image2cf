@@ -1,8 +1,9 @@
+import type { DrizzleDb } from "@/server/db";
 import { account, user } from "@/server/db/schemas";
+import { usernameToEmail } from "@/server/lib/auth";
 import { eq } from "drizzle-orm";
 import { scryptSync } from "node:crypto";
 import { nanoid } from "nanoid";
-import type { DrizzleDb } from "@/server/db";
 
 async function hashPassword(password: string) {
 	const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -22,34 +23,40 @@ async function hashPassword(password: string) {
 }
 
 /**
- * Create the first admin user from env if no users exist.
- * ADMIN_EMAIL + ADMIN_PASSWORD (+ optional ADMIN_NAME)
+ * Create the first admin when user table is empty.
+ * Prefer ADMIN_USERNAME; ADMIN_EMAIL is accepted as username for compatibility.
  */
 export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
-	const email = env.ADMIN_EMAIL as string | undefined;
+	const rawUsername = (env.ADMIN_USERNAME || env.ADMIN_EMAIL) as string | undefined;
 	const password = env.ADMIN_PASSWORD as string | undefined;
-	if (!email || !password) return;
+	if (!rawUsername || !password) return;
+
+	// Allow legacy email-like value: take local part as username
+	const username = String(rawUsername).includes("@")
+		? String(rawUsername).split("@")[0]!.toLowerCase()
+		: String(rawUsername).toLowerCase();
 
 	try {
 		const existing = await db.query.user.findFirst({
-			where: eq(user.email, email),
+			where: eq(user.username, username),
 		});
 		if (existing) return;
 
 		const anyUser = await db.query.user.findFirst();
-		// Only auto-create when database has no users, or always ensure this admin email exists
 		if (anyUser) return;
 
 		const userId = nanoid();
 		const now = new Date();
 		const passwordHash = await hashPassword(password);
-		const name = (env.ADMIN_NAME as string) || "Admin";
+		const name = (env.ADMIN_NAME as string) || username;
 
 		await db.insert(user).values({
 			id: userId,
 			name,
-			email,
+			email: usernameToEmail(username),
 			emailVerified: true,
+			username,
+			displayUsername: name,
 			role: "admin",
 			banned: false,
 			createdAt: now,
@@ -66,7 +73,7 @@ export async function bootstrapAdmin(db: DrizzleDb, env: Record<string, any>) {
 			updatedAt: now,
 		});
 
-		console.log(`[image2cf] Bootstrapped admin user: ${email}`);
+		console.log(`[image2cf] Bootstrapped admin user: ${username}`);
 	} catch (e) {
 		console.error("[image2cf] Failed to bootstrap admin:", e);
 	}

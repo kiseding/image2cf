@@ -8,6 +8,9 @@ export const user = sqliteTable("user", {
 		.$defaultFn(() => false)
 		.notNull(),
 	image: text("image"),
+	// Login account (plain username, not email)
+	username: text("username").unique(),
+	displayUsername: text("display_username"),
 	role: text("role", { enum: ["admin", "user"] })
 		.$defaultFn(() => "user")
 		.notNull(),
