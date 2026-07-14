@@ -472,6 +472,7 @@ async function setGenerationProgress(
 	phase: ProgressPhase,
 	percent: number,
 	extra?: Record<string, unknown>,
+	opts?: { touchRow?: boolean },
 ) {
 	const { db } = getContext();
 	const row = await db.query.messageGenerations.findFirst({
@@ -481,22 +482,23 @@ async function setGenerationProgress(
 	if (!row || row.status === "completed" || row.status === "failed") return;
 	const prev = (row.parameters as any) || {};
 	const startedAt = prev.progress?.startedAt || new Date().toISOString();
-	await db
-		.update(messageGenerations)
-		.set({
-			parameters: {
-				...prev,
-				progress: {
-					phase,
-					percent: Math.max(0, Math.min(100, Math.round(percent))),
-					startedAt,
-					updatedAt: new Date().toISOString(),
-					...extra,
-				},
-			} as any,
-			updatedAt: new Date().toISOString(),
-		})
-		.where(eq(messageGenerations.id, generationId));
+	// Soft progress must NOT bump row.updatedAt — that blocked stale reclaim forever
+	const patch: Record<string, unknown> = {
+		parameters: {
+			...prev,
+			progress: {
+				phase,
+				percent: Math.max(0, Math.min(100, Math.round(percent))),
+				startedAt,
+				updatedAt: new Date().toISOString(),
+				...extra,
+			},
+		} as any,
+	};
+	if (opts?.touchRow !== false && phase !== "calling_api") {
+		patch.updatedAt = new Date().toISOString();
+	}
+	await db.update(messageGenerations).set(patch as any).where(eq(messageGenerations.id, generationId));
 }
 
 const executeImageGeneration = async (params: GenerationParams, ctx: RequestContext) => {
@@ -595,31 +597,44 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		};
 
 		// Soft progress while waiting on upstream (most image APIs are not streamable)
+		const wallStart = Date.now();
+		const WALL_MS = 150_000; // hard cap 2.5 min for whole upstream call
 		let soft = 25;
-		await setGenerationProgress(generationId, "calling_api", soft, {
-			message: referImages?.length ? "calling_i2i" : "calling_t2i",
-			hasReference: !!referImages?.length,
-		});
+		await setGenerationProgress(
+			generationId,
+			"calling_api",
+			soft,
+			{
+				message: referImages?.length ? "calling_i2i" : "calling_t2i",
+				hasReference: !!referImages?.length,
+			},
+			{ touchRow: true },
+		);
 		const softTimer = setInterval(() => {
-			soft = Math.min(78, soft + 3);
-			void setGenerationProgress(generationId, "calling_api", soft, {
-				message: "waiting_upstream",
-			}).catch(() => {});
-		}, 2500);
+			soft = Math.min(78, soft + 2);
+			void setGenerationProgress(
+				generationId,
+				"calling_api",
+				soft,
+				{ message: "waiting_upstream" },
+				{ touchRow: false },
+			).catch(() => {});
+		}, 3000);
 
 		let result;
 		try {
-			if (isRelay) {
-				const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
-				result = await generateViaRelay(generateRequest, {
-					type: relay!.type,
-					baseURL: relay!.baseURL,
-					apiKey: relay!.apiKey,
-					modelId,
-					apiMode: relay!.apiMode || "endpoints",
-					endpoints: relay!.endpoints || null,
-				});
-			} else {
+			const callUpstream = async () => {
+				if (isRelay) {
+					const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
+					return await generateViaRelay(generateRequest, {
+						type: relay!.type,
+						baseURL: relay!.baseURL,
+						apiKey: relay!.apiKey,
+						modelId,
+						apiMode: relay!.apiMode || "endpoints",
+						endpoints: relay!.endpoints || null,
+					});
+				}
 				const providerInstance = getProviderById(providerId);
 				const provider = await aiService.getAiProviderById({ providerId }, ctx);
 				const settings =
@@ -630,8 +645,33 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 						}
 						return acc;
 					}, {} as ApiProviderSettings) ?? {};
-				result = await providerInstance.generate(generateRequest, settings);
-			}
+				return await providerInstance.generate(generateRequest, settings);
+			};
+
+			// Race: upstream vs wall clock (fetch timeout alone may not cover body read hangs)
+			result = await Promise.race([
+				callUpstream(),
+				new Promise<never>((_, reject) => {
+					setTimeout(() => reject(Object.assign(new Error("Generation wall timeout"), { name: "AbortError" })), WALL_MS);
+				}),
+			]);
+			console.log("[generate] upstream done", generationId, "ms", Date.now() - wallStart, "images", result?.images?.length);
+		} catch (upErr: any) {
+			clearInterval(softTimer);
+			const isTimeout = upErr?.name === "AbortError" || /timeout|aborted/i.test(String(upErr?.message || upErr));
+			console.error("[generate] upstream failed", generationId, upErr);
+			await setGenerationProgress(generationId, "failed", 100, {
+				message: isTimeout ? "upstream_timeout" : String(upErr?.message || upErr).slice(0, 120),
+			});
+			await db
+				.update(messageGenerations)
+				.set({
+					status: "failed",
+					errorReason: isTimeout ? "TIMEOUT" : "API_ERROR",
+					updatedAt: new Date().toISOString(),
+				})
+				.where(eq(messageGenerations.id, generationId));
+			return;
 		} finally {
 			clearInterval(softTimer);
 		}
@@ -908,7 +948,9 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 				})()
 			: [];
 
-	const ageMs = Date.now() - new Date(generation.updatedAt).getTime();
+	// Prefer progress.startedAt — soft progress used to bump updatedAt and hide staleness
+	const startedAtIso = progress?.startedAt || generation.createdAt;
+	const ageMs = Date.now() - new Date(startedAtIso).getTime();
 	const stale =
 		(generation.status === "pending" || generation.status === "generating") && ageMs > 90_000;
 
@@ -958,12 +1000,15 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	}
 	// Already running — do not start a second job unless stale (waitUntil may have been killed)
 	if (generation.status === "generating") {
-		const started = new Date(generation.updatedAt).getTime();
-		// 90s stale: CF waitUntil can be cut off after relay finished; allow reclaim
-		if (Date.now() - started < 90_000) {
+		const params = (generation.parameters as any) || {};
+		const startedIso = params.progress?.startedAt || generation.createdAt || generation.updatedAt;
+		const started = new Date(startedIso).getTime();
+		const age = Date.now() - started;
+		// 90s by startedAt (not updatedAt — soft progress used to refresh updatedAt)
+		if (age < 90_000) {
 			return { success: true, skipped: true, reason: "already_generating" as const };
 		}
-		console.warn("[generate] reclaiming stale generating job", generation.id, "ageMs", Date.now() - started);
+		console.warn("[generate] reclaiming stale generating job", generation.id, "ageMs", age);
 	}
 	// CAS claim: pending/failed always; generating only if we already decided it's stale above
 	const statusFilter =
@@ -1030,12 +1075,7 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	// Capture context at claim time — waitUntil may outlive the request;
 	// getContext() is a module singleton and must still point at D1/R2 bindings.
 	const run = async () => {
-		const hb = setInterval(() => {
-			void db
-				.update(messageGenerations)
-				.set({ updatedAt: new Date().toISOString() })
-				.where(and(eq(messageGenerations.id, generation.id), eq(messageGenerations.status, "generating")));
-		}, 45_000);
+		// No updatedAt heartbeat — stale reclaim uses progress.startedAt / createdAt
 
 		try {
 			const still = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
@@ -1105,7 +1145,7 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 				console.error("failed to mark generation failed:", e2);
 			}
 		} finally {
-			clearInterval(hb);
+			/* no hb */
 		}
 	};
 

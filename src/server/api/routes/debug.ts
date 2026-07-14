@@ -80,6 +80,35 @@ const app = new Hono<Env>()
 			),
 		);
 	})
+
+	/** Mark generations stuck in generating/pending as TIMEOUT (ops recovery) */
+	.post("/generations/fail-stale", async (c) => {
+		const { db } = getContext();
+		const maxAgeSec = Math.min(Number(c.req.query("maxAgeSec") || 120), 3600);
+		const rows = await db.query.messageGenerations.findMany({
+			orderBy: [desc(messageGenerations.createdAt)],
+			limit: 50,
+		});
+		const now = Date.now();
+		let fixed = 0;
+		for (const g of rows) {
+			if (g.status !== "pending" && g.status !== "generating") continue;
+			const params = (g.parameters as any) || {};
+			const started = Date.parse(params.progress?.startedAt || g.createdAt);
+			if (!Number.isFinite(started) || now - started < maxAgeSec * 1000) continue;
+			await db
+				.update(messageGenerations)
+				.set({
+					status: "failed",
+					errorReason: "TIMEOUT",
+					updatedAt: new Date().toISOString(),
+				})
+				.where(eq(messageGenerations.id, g.id));
+			fixed++;
+		}
+		return c.json(ok({ fixed, maxAgeSec }));
+	})
+
 	.get("/generations/:id", async (c) => {
 		const { db } = getContext();
 		const id = c.req.param("id");

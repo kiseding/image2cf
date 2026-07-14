@@ -63,8 +63,10 @@ const sizeMap: Record<string, string> = {
 	"3:4": "1024x1536",
 };
 
-/** Relay fetch timeout (ms). Worker waitUntil also has limits; fail cleanly instead of hanging UI. */
-const RELAY_FETCH_TIMEOUT_MS = 120_000;
+/** Relay fetch timeout (ms). Large b64 bodies can hang; fail cleanly instead of stuck UI. */
+const RELAY_FETCH_TIMEOUT_MS = 90_000;
+/** Max response body to parse (bytes). Prevents multi-minute base64 text reads. */
+const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = RELAY_FETCH_TIMEOUT_MS) {
 	const ctrl = new AbortController();
@@ -74,6 +76,19 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = RELA
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+async function readResponseTextLimited(resp: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<string> {
+	const cl = resp.headers.get("content-length");
+	if (cl && Number(cl) > maxBytes) {
+		throw Object.assign(new Error(`Response too large: ${cl} bytes`), { name: "AbortError" });
+	}
+	// Prefer arrayBuffer with size check over unbounded text()
+	const buf = await resp.arrayBuffer();
+	if (buf.byteLength > maxBytes) {
+		throw Object.assign(new Error(`Response too large: ${buf.byteLength} bytes`), { name: "AbortError" });
+	}
+	return new TextDecoder().decode(buf);
 }
 
 async function parseOkResponse(text: string, json: any): Promise<TypixChatApiResponse> {
@@ -194,7 +209,7 @@ export async function generateViaEndpointPaths(params: {
 			});
 		}
 
-		const text = await resp.text();
+		const text = await readResponseTextLimited(resp);
 		let json: any = null;
 		try {
 			json = JSON.parse(text);
@@ -215,7 +230,7 @@ export async function generateViaEndpointPaths(params: {
 					},
 					body: JSON.stringify({ ...baseBody, response_format: "b64_json" }),
 				});
-				const retryText = await retry.text();
+				const retryText = await readResponseTextLimited(retry);
 				let retryJson: any = null;
 				try {
 					retryJson = JSON.parse(retryText);
