@@ -57,7 +57,8 @@ export async function initDb() {
 	// Prevent local competition (e.g., useEffect called twice)
 	if (db) return db;
 
-	if (initPromise) return;
+	// Must await the same promise — previously returned undefined while init was in-flight
+	if (initPromise) return await initPromise;
 
 	initPromise = (async () => {
 		// Create database connection (local operation)

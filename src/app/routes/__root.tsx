@@ -6,6 +6,7 @@ import { useAuth } from "@/app/hooks/useAuth";
 import { useSettingsService } from "@/app/hooks/useService";
 import { useThemeManager } from "@/app/hooks/useTheme";
 import { initDb } from "@/app/lib/db-client";
+import { mode } from "@/server/lib/env";
 import { initContext } from "@/server/service/context";
 import { Outlet, createRootRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -183,46 +184,59 @@ function RootComponent() {
 		}
 	}, [authLoading, hasAuthResolved]);
 
-	// Initialize database and load settings on app startup
+	// App bootstrap after auth resolves.
+	// - client mode: needs WASM SQLite in the browser (real init, can be slow)
+	// - mixed/server mode (image2cf): all data via API — skip local DB, only light setup
 	useEffect(() => {
-		// Only initialize once auth has resolved for the first time
 		if (!hasAuthResolved) {
 			return;
 		}
 
 		let isMobileCleanup: (() => void) | null = null;
+		let cancelled = false;
 
 		const initialize = async () => {
 			try {
-				// Initialize database
-				const db = await initDb();
-				if (db) {
-					initContext({
-						db: db,
-						providerCloudflareBuiltin: import.meta.env.PROVIDER_CLOUDFLARE_BUILTIN === "true",
-					});
-					await initSettings();
-					isMobileCleanup = initIsMobile();
+				isMobileCleanup = initIsMobile();
+
+				if (mode === "client") {
+					// Full offline/local path: open WASM DB + migrate
+					const db = await initDb();
+					if (db) {
+						initContext({
+							db: db,
+							providerCloudflareBuiltin: import.meta.env.PROVIDER_CLOUDFLARE_BUILTIN === "true",
+						});
+						await initSettings();
+					}
+				} else {
+					// Server-backed: settings come from API after login (non-blocking for shell)
+					// Do not open local WASM DB — it is unused when isLogin and only slows first paint.
+					void initSettings().catch((e) => console.warn("settings load skipped/failed:", e));
 				}
 			} catch (err) {
 				console.error("Failed to initialize:", err);
-				setInitError(err instanceof Error ? err.message : "Failed to initialize application");
+				if (!cancelled) {
+					setInitError(err instanceof Error ? err.message : "Failed to initialize application");
+				}
 			}
 
-			setIsInitialized(true);
+			if (!cancelled) {
+				setIsInitialized(true);
+			}
 		};
 
 		initialize();
 
-		// Cleanup function
 		return () => {
+			cancelled = true;
 			if (isMobileCleanup) {
 				isMobileCleanup();
 			}
 		};
 	}, [hasAuthResolved]);
 
-	// Show loading screen during initialization - let index.html handle display
+	// Keep index.html splash until init finishes (client mode may take longer)
 	if (!isInitialized) {
 		return null;
 	}
