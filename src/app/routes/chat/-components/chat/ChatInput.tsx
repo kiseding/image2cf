@@ -275,8 +275,8 @@ export function ChatInput({
 		}))
 		.filter((slide) => slide.src); // Filter out slides without valid src
 	return (
-		<div className="border-border/50 border-t bg-background/80 p-6 backdrop-blur-md">
-			<div className="mx-auto w-full max-w-4xl px-4">
+		<div className="sticky bottom-0 z-20 border-border/50 border-t bg-background/95 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-md md:px-6 md:pt-3 md:pb-4">
+			<div className="mx-auto w-full max-w-4xl">
 				{/* Input Area */}
 				<div className="relative">
 					{/* Hidden file input */}
@@ -341,19 +341,21 @@ export function ChatInput({
 							placeholder={t("chat.typeMessage")}
 							disabled={disabled}
 							className={cn(
-								"max-h-60 min-h-[120px] resize-none border-0 bg-transparent pr-4 pb-16 placeholder:text-muted-foreground/60 focus-visible:ring-0",
-								"dark:!bg-transparent", // 强制覆盖shadcn默认背景
+								// Mobile: compact height so input sits near bottom; desktop a bit taller
+								"max-h-40 min-h-[44px] resize-none border-0 bg-transparent px-3 pt-2.5 pb-12 text-base placeholder:text-muted-foreground/60 focus-visible:ring-0 md:max-h-60 md:min-h-[72px] md:pb-14 md:text-sm",
+								"dark:!bg-transparent",
 							)}
-							rows={4}
+							rows={1}
 							onInput={(e) => {
 								const target = e.target as HTMLTextAreaElement;
 								target.style.height = "auto";
-								target.style.height = `${Math.min(target.scrollHeight, 240)}px`;
+								const max = window.matchMedia("(min-width: 768px)").matches ? 240 : 160;
+								target.style.height = `${Math.min(target.scrollHeight, max)}px`;
 							}}
 						/>
 
 						{/* Bottom buttons area */}
-						<div className="absolute inset-x-3 bottom-3 flex items-center justify-between">
+						<div className="absolute inset-x-2 bottom-2 flex items-center justify-between md:inset-x-3 md:bottom-3">
 							{/* Left side - Preferences button */}
 							<div className="relative flex items-center gap-2">
 								<TooltipProvider>
@@ -411,7 +413,7 @@ export function ChatInput({
 													size="icon"
 													onClick={handleUploadClick}
 													disabled={disabled || !canUploadImages || selectedImages.length >= maxImages}
-													className="h-10 w-10 rounded-lg border-border/50 bg-background/80 backdrop-blur-sm transition-all duration-200 hover:scale-105 hover:bg-accent/80"
+													className="h-8 w-8 rounded-lg border-border/50 bg-background/80 backdrop-blur-sm transition-all duration-200 hover:scale-105 hover:bg-accent/80 md:h-9 md:w-9"
 												>
 													<Image className="h-4 w-4" />
 												</Button>
@@ -434,7 +436,7 @@ export function ChatInput({
 									onClick={handleSend}
 									disabled={(!message.trim() && selectedImages.length === 0) || disabled}
 									size="icon"
-									className="h-10 w-10 rounded-lg bg-gradient-to-r from-primary to-primary/90 transition-all duration-200 hover:scale-105 disabled:scale-100 disabled:opacity-50"
+									className="h-8 w-8 rounded-lg bg-gradient-to-r from-primary to-primary/90 transition-all duration-200 hover:scale-105 disabled:scale-100 disabled:opacity-50 md:h-9 md:w-9"
 								>
 									<Send className="h-4 w-4" />
 								</Button>

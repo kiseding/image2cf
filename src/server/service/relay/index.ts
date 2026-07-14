@@ -9,6 +9,7 @@ import { userRelays } from "@/server/db/schemas";
 import { ServiceException } from "@/server/lib/exception";
 import { and, desc, eq } from "drizzle-orm";
 import z from "zod/v4";
+import { assertSafePublicUrl } from "@/server/lib/ssrf";
 import { type RequestContext, getContext } from "../context";
 
 const RelayModelSchema = z.object({
@@ -108,12 +109,15 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 	if (!row) {
 		throw new ServiceException("not_found", "Relay not found");
 	}
+	const key = row.apiKey || "";
 	return {
 		id: row.id,
 		name: row.name,
 		type: row.type,
 		baseURL: row.baseURL,
-		apiKey: row.apiKey,
+		// Never return full key to clients — use placeholder so edit form can keep "unchanged"
+		apiKey: key ? `${key.slice(0, 4)}****${key.slice(-4)}` : "",
+		hasApiKey: !!key,
 		models: (row.models as RelayModel[]) || [],
 		apiMode: (row as any).apiMode || "endpoints",
 		endpoints: (row as any).endpoints || {
@@ -135,7 +139,7 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			userId: ctx.userId,
 			name: req.name,
 			type: req.type,
-			baseURL: normalizeRelayBaseURL(req.type, req.baseURL),
+			baseURL: (() => { try { return assertSafePublicUrl(normalizeRelayBaseURL(req.type, req.baseURL)); } catch (e: any) { throw new ServiceException("invalid_parameter", e?.message || "Invalid baseURL"); } })(),
 			apiKey: req.apiKey.trim(),
 			models: req.models,
 			apiMode: req.type === "openai" ? req.apiMode || "endpoints" : "auto",
@@ -165,8 +169,20 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 		.set({
 			...(req.name !== undefined ? { name: req.name } : {}),
 			...(req.type !== undefined ? { type: req.type } : {}),
-			...(req.baseURL !== undefined ? { baseURL: normalizeRelayBaseURL(nextType, req.baseURL) } : {}),
-			...(req.apiKey !== undefined ? { apiKey: req.apiKey.trim() } : {}),
+			...(req.baseURL !== undefined
+				? {
+						baseURL: (() => {
+							try {
+								return assertSafePublicUrl(normalizeRelayBaseURL(nextType, req.baseURL));
+							} catch (e: any) {
+								throw new ServiceException("invalid_parameter", e?.message || "Invalid baseURL");
+							}
+						})(),
+				  }
+				: {}),
+			...(req.apiKey !== undefined && req.apiKey.trim() && !req.apiKey.includes("****")
+				? { apiKey: req.apiKey.trim() }
+				: {}),
 			...(req.models !== undefined ? { models: req.models } : {}),
 			...(req.apiMode !== undefined ? { apiMode: req.apiMode } : {}),
 			...(req.endpoints !== undefined ? { endpoints: req.endpoints } : {}),
@@ -184,7 +200,12 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
  */
 const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 	const type = req.type;
-	const baseURL = normalizeRelayBaseURL(type, req.baseURL);
+	let baseURL: string;
+	try {
+		baseURL = assertSafePublicUrl(normalizeRelayBaseURL(type, req.baseURL));
+	} catch (e: any) {
+		throw new ServiceException("invalid_parameter", e?.message || "Invalid baseURL");
+	}
 	const apiKey = req.apiKey.trim();
 
 	if (type === "openai") {

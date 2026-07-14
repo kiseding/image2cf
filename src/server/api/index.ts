@@ -19,6 +19,8 @@ import setupRouter from "./routes/setup";
 import userRouter from "./routes/settings";
 import type { ApiResult, Env } from "./util";
 
+let adminBootstrapDone = false;
+
 const factory = createFactory<Env>({
 	initApp: async (app) => {
 		app.use(async (c, next) => {
@@ -81,11 +83,14 @@ const factory = createFactory<Env>({
 				fileStorage: e.FILE_STORAGE || (e.R2 ? "r2" : "base64"),
 			});
 
-			await bootstrapAdmin(db, {
-				ADMIN_PASSWORD: e.ADMIN_PASSWORD,
-				ADMIN_NAME: e.ADMIN_NAME,
-				DB: c.env.DB,
-			});
+			if (!adminBootstrapDone) {
+				await bootstrapAdmin(db, {
+					ADMIN_PASSWORD: e.ADMIN_PASSWORD,
+					ADMIN_NAME: e.ADMIN_NAME,
+					DB: c.env.DB,
+				});
+				adminBootstrapDone = true;
+			}
 			await next();
 		});
 	},

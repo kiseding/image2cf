@@ -5,6 +5,7 @@ import z from "zod/v4";
 import { normalizeUsername, usernameToEmail } from "@/server/lib/auth";
 import { hashPassword, verifyPassword } from "@/server/lib/password";
 import { readWorkerEnv } from "@/server/lib/worker-env";
+import { rateLimit } from "@/server/lib/rate-limit";
 import { type Env, error } from "../util";
 
 /**
@@ -26,6 +27,11 @@ const app = new Hono<Env>().basePath("/login").post(
 		const d1 = c.env.DB;
 		const auth = c.var.auth;
 		const workerEnv = readWorkerEnv(c.env as any);
+		const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "unknown";
+		const rl = rateLimit(`login:${ip}:${uname}`, 20, 60_000);
+		if (!rl.ok) {
+			return c.json(error("error", "Too many login attempts, try later"), 429);
+		}
 
 		if (!d1) {
 			return c.json(error("error", "Database unavailable"), 500);
@@ -56,8 +62,15 @@ const app = new Hono<Env>().basePath("/login").post(
 
 			let valid = account?.password ? await verifyPassword(account.password, password) : false;
 
+			// Emergency recovery: only when credential hash is missing (not a permanent dual password)
 			const isAdmin = user.role === "admin" || uname === "admin";
-			if (!valid && isAdmin && workerEnv.ADMIN_PASSWORD && password === workerEnv.ADMIN_PASSWORD) {
+			if (
+				!valid &&
+				isAdmin &&
+				!account?.password &&
+				workerEnv.ADMIN_PASSWORD &&
+				password === workerEnv.ADMIN_PASSWORD
+			) {
 				await setCredentialPassword(d1, user.id, account?.id, password);
 				await d1
 					.prepare(
@@ -72,7 +85,7 @@ const app = new Hono<Env>().basePath("/login").post(
 					role: "admin",
 				};
 				valid = true;
-				console.log("[image2cf] admin password accepted via ADMIN_PASSWORD and repaired");
+				console.log("[image2cf] admin credential repaired from ADMIN_PASSWORD (empty hash)");
 			}
 
 			if (!valid) {

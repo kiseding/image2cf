@@ -106,7 +106,7 @@ function RelaySettingsPage() {
 				name: detail.name,
 				type: detail.type as RelayProtocol,
 				baseURL: detail.baseURL,
-				apiKey: detail.apiKey,
+				apiKey: "", // leave blank = keep existing (server ignores masked/empty)
 				apiMode: (detail.apiMode as RelayForm["apiMode"]) || "endpoints",
 				endpoints: {
 					t2i: ep.t2i || defaultEndpoints.t2i,
@@ -139,7 +139,7 @@ function RelaySettingsPage() {
 	};
 
 	const handleSave = async () => {
-		if (!form.name.trim() || !form.baseURL.trim() || !form.apiKey.trim()) {
+		if (!form.name.trim() || !form.baseURL.trim() || (!editingId && !form.apiKey.trim())) {
 			toast({ title: t("common.error"), description: t("settings.relay.fillRequired"), variant: "destructive" });
 			return;
 		}
@@ -161,7 +161,6 @@ function RelaySettingsPage() {
 				name: form.name,
 				type: form.type,
 				baseURL: form.baseURL,
-				apiKey: form.apiKey,
 				apiMode: form.apiMode,
 				endpoints: form.endpoints,
 				enabled: form.enabled,
@@ -172,11 +171,16 @@ function RelaySettingsPage() {
 					defaultWidth: m.defaultWidth,
 					defaultHeight: m.defaultHeight,
 				})),
+				...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
 			};
 			if (editingId) {
 				await relayService.updateRelay({ id: editingId, ...payload });
 			} else {
-				await relayService.createRelay(payload);
+				if (!form.apiKey.trim()) {
+					toast({ title: t("common.error"), description: t("settings.relay.fillRequired"), variant: "destructive" });
+					return;
+				}
+				await relayService.createRelay({ ...payload, apiKey: form.apiKey.trim() });
 			}
 			await mutateRelays();
 			await mutate("ai-providers-with-models");
@@ -471,8 +475,8 @@ function RelaySettingsPage() {
 							<Input
 								type="password"
 								value={form.apiKey}
+								placeholder={editingId ? "•••• leave blank to keep" : "sk-..."}
 								onChange={(e) => setForm((p) => ({ ...p, apiKey: e.target.value }))}
-								placeholder="sk-..."
 							/>
 						</div>
 

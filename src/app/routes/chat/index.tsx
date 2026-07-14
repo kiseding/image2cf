@@ -203,10 +203,7 @@ function ChatPageContent() {
 			{/* Main chat content area - margin adjustment for slide animation */}
 			<div
 				className={cn(
-					"flex flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
-					// Desktop: Margin calculation based on sidebar slide state
-					// When expanded: GlobalNavigation (16px) + ChatSidebar (320px) = 336px
-					// When collapsed: Only GlobalNavigation (16px), sidebar is completely hidden
+					"flex min-h-0 flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
 					// Desktop: GlobalNavigation 16 + optional ChatSidebar 320
 					!isMobile && isOpen && "md:ml-96",
 					!isMobile && !isOpen && "md:ml-16",

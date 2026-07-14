@@ -5,7 +5,7 @@ import { chats, messageAttachments, messageGenerations, messages } from "@/serve
 import { createSchemaOmits } from "@/server/db/util";
 import { inBrowser, inCfWorker } from "@/server/lib/env";
 import { ServiceException } from "@/server/lib/exception";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
 import { createInsertSchema, createUpdateSchema } from "drizzle-zod";
 import z from "zod/v4";
 import { aiService } from "../ai";
@@ -455,8 +455,9 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		if (isRelay) {
 			const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
 			const model = relay?.models.find((m) => m.id === modelId);
-			modelAbility = (model?.ability as "t2i" | "i2i") || "i2i";
-			maxInputImages = model?.maxInputImages || 1;
+			// Only use images when the user explicitly attached them (no silent last-image i2i)
+			modelAbility = userImages && userImages.length > 0 ? "i2i" : "t2i";
+			maxInputImages = model?.maxInputImages || 4;
 		} else {
 			const providerInstance = getProviderById(providerId);
 			const model = providerInstance.models.find((m) => m.id === modelId);
@@ -708,8 +709,16 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 		throw new ServiceException("error", "Failed to create assistant message");
 	}
 
-	// Don't execute image generation here - client will call createMessageGenerate
-	// This avoids CF Worker 30-second timeout limitation
+	// Kick off generation in background when executionCtx is available (preferred path).
+	// Client may still call createMessageGenerate; that path is idempotent.
+	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
+	if (exec?.waitUntil && generation) {
+		exec.waitUntil(
+			createMessageGenerate({ generationId: generation.id }, ctx).catch((e) =>
+				console.error("auto createMessageGenerate failed", e),
+			),
+		);
+	}
 
 	return {
 		messages: [
@@ -740,30 +749,7 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 		return null;
 	}
 
-	// Check if generation is still pending/generating but has exceeded 5 minutes
-	if (generation.status === "pending" || generation.status === "generating") {
-		const lastGenTime = new Date(generation.updatedAt);
-		const now = new Date();
-		const elapsedMinutes = (now.getTime() - lastGenTime.getTime()) / 1000 / 60;
-
-		if (elapsedMinutes > 5) {
-			// Mark as failed due to timeout
-			type UpdateGeneration = Pick<typeof generation, "status" | "errorReason" | "updatedAt">;
-			const updateData = {
-				status: "failed",
-				errorReason: "TIMEOUT",
-				updatedAt: now.toISOString(),
-			} as UpdateGeneration;
-			await db.update(messageGenerations).set(updateData).where(eq(messageGenerations.id, req.generationId));
-
-			return {
-				...generation,
-				...updateData,
-				resultUrls: undefined,
-			};
-		}
-	}
-
+	// Read-only status (do not mutate TIMEOUT here — races with in-flight generation)
 	return {
 		...generation,
 		resultUrls: generation.fileIds
@@ -780,11 +766,10 @@ export const CreateMessageGenerateSchema = z.object({
 	generationId: z.string(),
 });
 export type CreateMessageGenerate = z.infer<typeof CreateMessageGenerateSchema>;
-const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestContext) => {
+async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestContext) {
 	const { db } = getContext();
 	const { userId } = ctx;
 
-	// Find the generation record
 	const generation = await db.query.messageGenerations.findFirst({
 		where: eq(messageGenerations.id, req.generationId),
 	});
@@ -793,16 +778,38 @@ const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestCon
 		throw new ServiceException("not_found", "Generation not found");
 	}
 
-	// Find the message associated with this generation
+	// Idempotent: already done
+	if (generation.status === "completed") {
+		return { success: true, skipped: true, reason: "already_completed" as const };
+	}
+	// Already running — do not start a second job
+	if (generation.status === "generating") {
+		const started = new Date(generation.updatedAt).getTime();
+		// Stale lock > 10 minutes → allow reclaim
+		if (Date.now() - started < 10 * 60 * 1000) {
+			return { success: true, skipped: true, reason: "already_generating" as const };
+		}
+	}
+	// CAS claim: pending/failed always; generating only if we already decided it's stale above
+	const statusFilter =
+		generation.status === "generating"
+			? eq(messageGenerations.status, "generating")
+			: or(eq(messageGenerations.status, "pending"), eq(messageGenerations.status, "failed"));
+	const claim = await db
+		.update(messageGenerations)
+		.set({ status: "generating", updatedAt: new Date().toISOString(), errorReason: null as any })
+		.where(and(eq(messageGenerations.id, generation.id), statusFilter))
+		.returning();
+
+	if (!claim.length) {
+		return { success: true, skipped: true, reason: "claim_failed" as const };
+	}
+
 	const message = await db.query.messages.findFirst({
 		where: eq(messages.generationId, req.generationId),
 		with: {
 			chat: true,
-			attachments: {
-				with: {
-					file: true,
-				},
-			},
+			attachments: { with: { file: true } },
 		},
 	});
 
@@ -810,56 +817,111 @@ const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestCon
 		throw new ServiceException("not_found", "Message not found");
 	}
 
-	// Get user images from the parent user message (previous message in chat)
+	// Abort if chat was hard-deleted mid-flight
+	const chatStill = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
+	if (!chatStill || chatStill.userId !== userId) {
+		await db
+			.update(messageGenerations)
+			.set({ status: "failed", errorReason: "UNKNOWN", updatedAt: new Date().toISOString() })
+			.where(eq(messageGenerations.id, generation.id));
+		return { success: false, skipped: true, reason: "chat_gone" as const };
+	}
+
+	// Parent user message = latest user message created BEFORE this assistant message
 	const userMessage = await db.query.messages.findFirst({
-		where: and(eq(messages.chatId, message.chatId), eq(messages.role, "user"), eq(messages.type, "text")),
+		where: and(
+			eq(messages.chatId, message.chatId),
+			eq(messages.role, "user"),
+			lt(messages.createdAt, message.createdAt),
+		),
 		orderBy: [desc(messages.createdAt)],
 		with: {
-			attachments: {
-				with: {
-					file: true,
-				},
-			},
+			attachments: { with: { file: true } },
 		},
 	});
 
-	const userImages = userMessage?.attachments.length
+	const userImages = userMessage?.attachments?.length
 		? await Promise.all(userMessage.attachments.map(async (att) => await getFileData(att.fileId, userId)))
 		: undefined;
 
-	// Mark generating so UI polling knows work started
-	await db
-		.update(messageGenerations)
-		.set({ status: "generating", updatedAt: new Date().toISOString() })
-		.where(eq(messageGenerations.id, generation.id));
-
-	// Extract parameters from generation record
 	const params = generation.parameters as any;
 	const imageCount = params?.imageCount || 1;
 	const width = params?.width;
 	const height = params?.height;
 	const aspectRatio = params?.aspectRatio;
 
-	// Execute image generation
-	await executeImageGeneration(
-		{
-			generationId: generation.id,
-			prompt: generation.prompt,
-			provider: generation.provider,
-			model: generation.model,
-			chatId: message.chatId,
-			userId,
-			userImages: userImages?.filter(Boolean) as string[] | undefined,
-			imageCount,
-			width,
-			height,
-			aspectRatio,
-			messageId: message.id,
-		},
-		ctx,
-	);
+	const run = async () => {
+		// Heartbeat while running (best-effort)
+		const hb = setInterval(() => {
+			void db
+				.update(messageGenerations)
+				.set({ updatedAt: new Date().toISOString() })
+				.where(and(eq(messageGenerations.id, generation.id), eq(messageGenerations.status, "generating")));
+		}, 60_000);
 
-	return { success: true };
+		try {
+			// Re-check chat still exists before spending API call
+			const still = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
+			if (!still) {
+				await db
+					.update(messageGenerations)
+					.set({ status: "failed", errorReason: "UNKNOWN", updatedAt: new Date().toISOString() })
+					.where(eq(messageGenerations.id, generation.id));
+				return;
+			}
+
+			await executeImageGeneration(
+				{
+					generationId: generation.id,
+					prompt: generation.prompt,
+					provider: generation.provider,
+					model: generation.model,
+					chatId: message.chatId,
+					userId,
+					userImages: userImages?.filter(Boolean) as string[] | undefined,
+					imageCount,
+					width,
+					height,
+					aspectRatio,
+					messageId: message.id,
+				},
+				ctx,
+			);
+
+			// If chat deleted during generation, purge leftover files
+			const after = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
+			if (!after) {
+				const g = await db.query.messageGenerations.findFirst({
+					where: eq(messageGenerations.id, generation.id),
+				});
+				const fids = (g?.fileIds as string[] | null) || [];
+				if (fids.length) await deleteStoredFiles(fids, userId);
+				await db.delete(messageGenerations).where(eq(messageGenerations.id, generation.id));
+			}
+		} catch (e) {
+			console.error("createMessageGenerate background error:", e);
+			await db
+				.update(messageGenerations)
+				.set({
+					status: "failed",
+					errorReason: "UNKNOWN",
+					updatedAt: new Date().toISOString(),
+				})
+				.where(eq(messageGenerations.id, generation.id));
+		} finally {
+			clearInterval(hb);
+		}
+	};
+
+	// Prefer background execution on Cloudflare to avoid 30s request timeout
+	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
+	if (exec?.waitUntil) {
+		exec.waitUntil(run());
+		return { success: true, async: true };
+	}
+
+	await run();
+	return { success: true, async: false };
 };
 
 export const RegenerateMessageSchema = z.object({
