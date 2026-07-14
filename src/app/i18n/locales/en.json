@@ -39,7 +39,7 @@
 		"chatWith": "Start creating",
 		"imageGenerated": "Image generated successfully",
 		"thinking": "AI is thinking...",
-		"generating": "Generating image...",
+		"generating": "Generating image…",
 		"selectModel": "Select model",
 		"welcomeMessage": "Describe the image you'd like me to create! Let your imagination run wild.",
 		"generatedImage": "Generated image",
@@ -86,7 +86,15 @@
 		"height": "Height",
 		"imageSizeHint": "Pixel width/height; sent as size/width/height to relays",
 		"modelLoadFailed": "Failed to load models, tap to retry",
-		"configureRelay": "Configure a relay / model first"
+		"configureRelay": "Configure a relay / model first",
+		"progress": {
+			"queued": "Submitted, queued",
+			"preparing": "Preparing request…",
+			"calling": "Calling image API…",
+			"parsing": "Parsing response…",
+			"saving": "Saving images…",
+			"hint": "Message sent. Most image APIs are not pixel-streamable; this shows server-side stage progress."
+		}
 	},
 	"navigation": {
 		"chat": "Chat",

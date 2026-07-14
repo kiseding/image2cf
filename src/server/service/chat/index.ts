@@ -458,6 +458,47 @@ interface GenerationParams {
 	messageId?: string; // For regeneration, exclude this message from reference search
 }
 
+type ProgressPhase =
+	| "queued"
+	| "preparing"
+	| "calling_api"
+	| "parsing"
+	| "saving"
+	| "completed"
+	| "failed";
+
+async function setGenerationProgress(
+	generationId: string,
+	phase: ProgressPhase,
+	percent: number,
+	extra?: Record<string, unknown>,
+) {
+	const { db } = getContext();
+	const row = await db.query.messageGenerations.findFirst({
+		where: eq(messageGenerations.id, generationId),
+		columns: { parameters: true, status: true },
+	});
+	if (!row || row.status === "completed" || row.status === "failed") return;
+	const prev = (row.parameters as any) || {};
+	const startedAt = prev.progress?.startedAt || new Date().toISOString();
+	await db
+		.update(messageGenerations)
+		.set({
+			parameters: {
+				...prev,
+				progress: {
+					phase,
+					percent: Math.max(0, Math.min(100, Math.round(percent))),
+					startedAt,
+					updatedAt: new Date().toISOString(),
+					...extra,
+				},
+			} as any,
+			updatedAt: new Date().toISOString(),
+		})
+		.where(eq(messageGenerations.id, generationId));
+}
+
 const executeImageGeneration = async (params: GenerationParams, ctx: RequestContext) => {
 	const { db } = getContext();
 	const {
@@ -476,6 +517,8 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 	} = params;
 
 	try {
+		await setGenerationProgress(generationId, "preparing", 12, { message: "preparing_request" });
+
 		const isRelay = providerId.startsWith("relay:");
 		let modelAbility: "t2i" | "i2i" = "t2i";
 		let maxInputImages = 1;
@@ -551,31 +594,52 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			height,
 		};
 
-		let result;
-		if (isRelay) {
-			const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
-			result = await generateViaRelay(generateRequest, {
-				type: relay!.type,
-				baseURL: relay!.baseURL,
-				apiKey: relay!.apiKey,
-				modelId,
-				apiMode: relay!.apiMode || "endpoints",
-				endpoints: relay!.endpoints || null,
+		// Soft progress while waiting on upstream (most image APIs are not streamable)
+		let soft = 25;
+		await setGenerationProgress(generationId, "calling_api", soft, {
+			message: referImages?.length ? "calling_i2i" : "calling_t2i",
+			hasReference: !!referImages?.length,
+		});
+		const softTimer = setInterval(() => {
+			soft = Math.min(78, soft + 3);
+			void setGenerationProgress(generationId, "calling_api", soft, {
+				message: "waiting_upstream",
 			});
-		} else {
-			const providerInstance = getProviderById(providerId);
-			const provider = await aiService.getAiProviderById({ providerId }, ctx);
-			const settings =
-				provider?.settings?.reduce((acc, setting) => {
-					const value = setting.value ?? setting.defaultValue;
-					if (value !== undefined) {
-						acc[setting.key] = value;
-					}
-					return acc;
-				}, {} as ApiProviderSettings) ?? {};
-			result = await providerInstance.generate(generateRequest, settings);
+		}, 2500);
+
+		let result;
+		try {
+			if (isRelay) {
+				const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
+				result = await generateViaRelay(generateRequest, {
+					type: relay!.type,
+					baseURL: relay!.baseURL,
+					apiKey: relay!.apiKey,
+					modelId,
+					apiMode: relay!.apiMode || "endpoints",
+					endpoints: relay!.endpoints || null,
+				});
+			} else {
+				const providerInstance = getProviderById(providerId);
+				const provider = await aiService.getAiProviderById({ providerId }, ctx);
+				const settings =
+					provider?.settings?.reduce((acc, setting) => {
+						const value = setting.value ?? setting.defaultValue;
+						if (value !== undefined) {
+							acc[setting.key] = value;
+						}
+						return acc;
+					}, {} as ApiProviderSettings) ?? {};
+				result = await providerInstance.generate(generateRequest, settings);
+			}
+		} finally {
+			clearInterval(softTimer);
 		}
+
+		await setGenerationProgress(generationId, "parsing", 85, { message: "parsing_response" });
+
 		if (result.errorReason) {
+			await setGenerationProgress(generationId, "failed", 100, { message: result.errorReason });
 			await db
 				.update(messageGenerations)
 				.set({
@@ -589,6 +653,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 
 		if (!result.images?.length) {
 			console.error("Image generation returned no images", { providerId, modelId });
+			await setGenerationProgress(generationId, "failed", 100, { message: "no_images" });
 			await db
 				.update(messageGenerations)
 				.set({
@@ -600,9 +665,15 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			return;
 		}
 
+		await setGenerationProgress(generationId, "saving", 92, {
+			message: "saving_images",
+			imageCount: result.images.length,
+		});
+
 		// Save generated files to database (URLs preferred over huge base64)
 		const fileIds = await saveFiles(result.images, userId);
 		if (!fileIds.length) {
+			await setGenerationProgress(generationId, "failed", 100, { message: "save_failed" });
 			await db
 				.update(messageGenerations)
 				.set({
@@ -613,6 +684,14 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				.where(eq(messageGenerations.id, generationId));
 			return;
 		}
+
+		const prevParams =
+			(
+				await db.query.messageGenerations.findFirst({
+					where: eq(messageGenerations.id, generationId),
+					columns: { parameters: true },
+				})
+			)?.parameters || {};
 
 		await db
 			.update(messageGenerations)
@@ -620,6 +699,15 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				status: "completed",
 				fileIds,
 				generationTime: Date.now() - now.getTime(),
+				parameters: {
+					...(prevParams as any),
+					progress: {
+						phase: "completed",
+						percent: 100,
+						updatedAt: new Date().toISOString(),
+						message: "done",
+					},
+				} as any,
 				updatedAt: now.toISOString(),
 			})
 			.where(eq(messageGenerations.id, generationId));
@@ -628,6 +716,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		const msg = error instanceof Error ? error.message : String(error);
 		const isSize =
 			/too large|too big|SQLITE_TOOBIG|max length|string or blob too big/i.test(msg);
+		await setGenerationProgress(generationId, "failed", 100, { message: msg.slice(0, 120) });
 		await db
 			.update(messageGenerations)
 			.set({
@@ -717,6 +806,13 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 				width: req.width,
 				height: req.height,
 				aspectRatio: req.aspectRatio,
+				progress: {
+					phase: "queued",
+					percent: 5,
+					startedAt: new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+					message: "queued",
+				},
 			} as any,
 		})
 		.returning();
@@ -778,8 +874,11 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 	}
 
 	// Read-only status (do not mutate TIMEOUT here — races with in-flight generation)
+	const params = (generation.parameters as any) || {};
+	const progress = params.progress || null;
 	return {
 		...generation,
+		progress,
 		resultUrls: generation.fileIds
 			? await Promise.all(
 					(generation.fileIds as string[]).map(async (fileId) => {
@@ -832,6 +931,8 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	if (!claim.length) {
 		return { success: true, skipped: true, reason: "claim_failed" as const };
 	}
+
+	await setGenerationProgress(generation.id, "preparing", 10, { message: "claimed" });
 
 	const message = await db.query.messages.findFirst({
 		where: eq(messages.generationId, req.generationId),
@@ -984,6 +1085,7 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 		throw new ServiceException("not_found", "Chat not found");
 	}
 
+	const prevParams = (originalGeneration.parameters as any) || {};
 	// Reset the existing generation record to pending status
 	await db
 		.update(messageGenerations)
@@ -992,6 +1094,16 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 			fileIds: null, // Clear previous results
 			errorReason: null, // Clear previous errors
 			generationTime: null, // Clear previous timing
+			parameters: {
+				...prevParams,
+				progress: {
+					phase: "queued",
+					percent: 5,
+					startedAt: new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+					message: "queued",
+				},
+			} as any,
 			updatedAt: new Date().toISOString(),
 		})
 		.where(eq(messageGenerations.id, originalGeneration.id));
@@ -1007,8 +1119,15 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 	// Update chat timestamp
 	await db.update(chats).set({ updatedAt: new Date().toISOString() }).where(eq(chats.id, chat.id));
 
-	// Don't execute image generation here - client will call createMessageGenerate
-	// This avoids CF Worker 30-second timeout limitation
+	// Start in background when possible (idempotent client call still ok)
+	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
+	if (exec?.waitUntil) {
+		exec.waitUntil(
+			createMessageGenerate({ generationId: originalGeneration.id }, ctx).catch((e) =>
+				console.error("auto regenerate generate failed", e),
+			),
+		);
+	}
 
 	return {
 		messageId: req.messageId,

@@ -169,14 +169,13 @@ export function ChatMessageItem({
 				}
 			};
 
-			// Start polling every 3 seconds after initial 3 second delay
+			// Poll sooner so users see "queued → calling" progress quickly
 			const timeoutId = setTimeout(() => {
 				if (isMessageGenerating && pollingGenerationIdRef.current === generationId) {
 					pollStatus();
-					// Start interval polling after first poll completes
-					intervalRef.current = setInterval(pollStatus, 3000);
+					intervalRef.current = setInterval(pollStatus, 1500);
 				}
-			}, 3000);
+			}, 400);
 
 			// Cleanup on unmount or when generation is no longer pending
 			return () => {
@@ -338,24 +337,72 @@ export function ChatMessageItem({
 									"max-w-2xl rounded-xl border border-border/50 bg-card/80 p-4 text-left shadow-sm transition-all duration-200 hover:shadow-md",
 								)}
 							>
-								{isMessageGenerating && !isUser ? (
-									<div className="space-y-3">
-										<div className="flex items-center gap-2">
-											<div className="flex space-x-1">
-												<div className="h-2 w-2 animate-bounce rounded-full bg-primary" />
-												<div className="h-2 w-2 animate-bounce rounded-full bg-primary delay-75" />
-												<div className="h-2 w-2 animate-bounce rounded-full bg-primary delay-150" />
+							{isMessageGenerating && !isUser ? (
+								(() => {
+									const progress = (message.generation as any)?.progress as
+										| { phase?: string; percent?: number; message?: string; startedAt?: string }
+										| undefined;
+									const phase = progress?.phase || (message.generation?.status === "pending" ? "queued" : "calling_api");
+									const percent =
+										typeof progress?.percent === "number"
+											? progress.percent
+											: message.generation?.status === "pending"
+												? 8
+												: 35;
+									const phaseLabel = (() => {
+										switch (phase) {
+											case "queued":
+												return t("chat.progress.queued", "已提交，排队中");
+											case "preparing":
+												return t("chat.progress.preparing", "准备请求…");
+											case "calling_api":
+												return t("chat.progress.calling", "正在调用生图接口…");
+											case "parsing":
+												return t("chat.progress.parsing", "解析返回结果…");
+											case "saving":
+												return t("chat.progress.saving", "保存图片…");
+											default:
+												return t("chat.generating");
+										}
+									})();
+									const elapsedSec = progress?.startedAt
+										? Math.max(0, Math.floor((Date.now() - Date.parse(progress.startedAt)) / 1000))
+										: null;
+									return (
+										<div className="w-full min-w-[16rem] space-y-3 sm:min-w-[20rem]">
+											<div className="flex items-center justify-between gap-3">
+												<div className="flex items-center gap-2">
+													<div className="flex space-x-1">
+														<div className="h-2 w-2 animate-bounce rounded-full bg-primary" />
+														<div className="h-2 w-2 animate-bounce rounded-full bg-primary delay-75" />
+														<div className="h-2 w-2 animate-bounce rounded-full bg-primary delay-150" />
+													</div>
+													<span className="font-medium text-foreground text-xs">{phaseLabel}</span>
+												</div>
+												<span className="font-mono text-muted-foreground text-xs tabular-nums">
+													{percent}%
+													{elapsedSec != null ? ` · ${elapsedSec}s` : ""}
+												</span>
 											</div>
-											<span className="text-muted-foreground text-xs">
-												{message.type === "image" ? t("chat.generating") : t("chat.thinking")}
-											</span>
+											<div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+												<div
+													className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+													style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
+												/>
+											</div>
+											<p className="text-muted-foreground text-[11px] leading-relaxed">
+												{t(
+													"chat.progress.hint",
+													"消息已发送成功。多数生图接口不支持像素级流式进度，这里显示的是服务端阶段进度。",
+												)}
+											</p>
+											<div className="space-y-2">
+												<Skeleton className="h-24 w-full rounded-lg" />
+											</div>
 										</div>
-										<div className="space-y-2">
-											<Skeleton className="h-4 w-full" />
-											<Skeleton className="h-4 w-3/4" />
-										</div>
-									</div>
-								) : isMessageFailed && !isUser ? (
+									);
+								})()
+							) : isMessageFailed && !isUser ? (
 									<div className="space-y-3">
 										{/* Show original prompt if available */}
 										{message.content && (
