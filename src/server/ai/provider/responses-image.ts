@@ -1,3 +1,4 @@
+import { extractImagesFromAny } from "@/server/lib/image-parse";
 import { base64ToDataURI, fetchUrlToDataURI } from "@/server/lib/util";
 import openai from "openai";
 import type { TypixChatApiResponse, TypixGenerateRequest } from "../types/api";
@@ -147,13 +148,14 @@ async function extractImagesFromResponse(response: any): Promise<string[]> {
 		for (const image of response.data) {
 			if (image.b64_json) out.push(base64ToDataURI(image.b64_json));
 			else if (image.url) {
-				try {
-					out.push(await fetchUrlToDataURI(image.url));
-				} catch {
-					/* skip */
-				}
+				// keep URL — avoid huge base64 in D1
+				out.push(String(image.url));
 			}
 		}
+	}
+
+	if (!out.length) {
+		return await extractImagesFromAny(response, { preferUrl: true });
 	}
 
 	return out;

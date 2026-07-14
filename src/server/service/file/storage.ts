@@ -77,22 +77,35 @@ const storageHandlers: Record<
 	}, */
 };
 
+/** D1 practical limit for a text field is well under 1MB; keep a safety margin. */
+const MAX_INLINE_DATA_URI_CHARS = 800_000;
+
 export const saveFiles = async (fileDatas: string[], userId: string) => {
 	const { db } = getContext();
 
-	const filesSave = await db
-		.insert(files)
-		.values(
-			await Promise.all(
-				fileDatas.map(async (file) => ({
-					userId,
-					storage: fileStorage,
-					url: await storageHandlers[fileStorage].save(file, userId),
-				})),
-			),
-		)
-		.returning();
+	if (!fileDatas?.length) {
+		return [];
+	}
 
+	const values = await Promise.all(
+		fileDatas.map(async (file) => {
+			let url = file;
+			// Prefer remote URL as-is (small). Only store base64 data URI when necessary.
+			if (url.startsWith("data:") && url.length > MAX_INLINE_DATA_URI_CHARS) {
+				throw new Error(
+					`Image data too large for database storage (${Math.round(url.length / 1024)}KB). Use a relay that returns image URLs.`,
+				);
+			}
+			url = await storageHandlers[fileStorage].save(url, userId);
+			return {
+				userId,
+				storage: fileStorage,
+				url,
+			};
+		}),
+	);
+
+	const filesSave = await db.insert(files).values(values).returning();
 	return filesSave.map((f) => f.id);
 };
 

@@ -470,9 +470,33 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			return;
 		}
 
-		// Save generated files to database
+		if (!result.images?.length) {
+			console.error("Image generation returned no images", { providerId, modelId });
+			await db
+				.update(messageGenerations)
+				.set({
+					status: "failed",
+					errorReason: "API_ERROR",
+					updatedAt: now.toISOString(),
+				})
+				.where(eq(messageGenerations.id, generationId));
+			return;
+		}
+
+		// Save generated files to database (URLs preferred over huge base64)
 		const fileIds = await saveFiles(result.images, userId);
-		// Update generation with result URLs
+		if (!fileIds.length) {
+			await db
+				.update(messageGenerations)
+				.set({
+					status: "failed",
+					errorReason: "API_ERROR",
+					updatedAt: now.toISOString(),
+				})
+				.where(eq(messageGenerations.id, generationId));
+			return;
+		}
+
 		await db
 			.update(messageGenerations)
 			.set({
@@ -484,11 +508,14 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			.where(eq(messageGenerations.id, generationId));
 	} catch (error) {
 		console.error("Error generating image:", error);
+		const msg = error instanceof Error ? error.message : String(error);
+		const isSize =
+			/too large|too big|SQLITE_TOOBIG|max length|string or blob too big/i.test(msg);
 		await db
 			.update(messageGenerations)
 			.set({
 				status: "failed",
-				errorReason: error instanceof ConfigInvalidError ? "CONFIG_INVALID" : "UNKNOWN",
+				errorReason: error instanceof ConfigInvalidError ? "CONFIG_INVALID" : isSize ? "API_ERROR" : "UNKNOWN",
 				updatedAt: new Date().toISOString(),
 			})
 			.where(eq(messageGenerations.id, generationId));
@@ -711,6 +738,12 @@ const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestCon
 	const userImages = userMessage?.attachments.length
 		? await Promise.all(userMessage.attachments.map(async (att) => await getFileData(att.fileId, userId)))
 		: undefined;
+
+	// Mark generating so UI polling knows work started
+	await db
+		.update(messageGenerations)
+		.set({ status: "generating", updatedAt: new Date().toISOString() })
+		.where(eq(messageGenerations.id, generation.id));
 
 	// Extract parameters from generation record
 	const params = generation.parameters as any;
