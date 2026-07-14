@@ -39,8 +39,10 @@ export function normalizeUsername(value: string) {
 	return value.trim().toLowerCase();
 }
 
-export const createAuth = (db: any, config?: AuthConfig) =>
+export const createAuth = (db: any, config?: AuthConfig & { secret?: string }) =>
 	betterAuth({
+		// Prefer explicit secret so Workers secrets stay stable across isolates
+		secret: config?.secret || undefined,
 		database: drizzleAdapter(db, {
 			provider: "sqlite",
 			schema: {

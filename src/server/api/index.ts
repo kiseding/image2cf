@@ -49,7 +49,15 @@ const factory = createFactory<Env>({
 			};
 
 			c.set("db", db);
-			c.set("auth", createAuth(db, authConfig));
+			c.set(
+				"auth",
+				createAuth(db, {
+					...authConfig,
+					// Reuse ADMIN_PASSWORD as signing secret fallback so cookies are stable
+					// Prefer dedicated BETTER_AUTH_SECRET when provided
+					secret: (c.env as any).BETTER_AUTH_SECRET || e.ADMIN_PASSWORD || undefined,
+				}),
+			);
 			initContext({
 				db,
 				AI: c.env.AI,

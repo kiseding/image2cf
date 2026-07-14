@@ -19,6 +19,7 @@ export function readWorkerEnv(env: Record<string, any> | undefined | null) {
 	return {
 		ADMIN_PASSWORD: get("ADMIN_PASSWORD"),
 		ADMIN_NAME: get("ADMIN_NAME"),
+		BETTER_AUTH_SECRET: get("BETTER_AUTH_SECRET"),
 		MODE: get("MODE"),
 		PROVIDER_CLOUDFLARE_BUILTIN: get("PROVIDER_CLOUDFLARE_BUILTIN"),
 		AUTH_EMAIL_VERIFICATION_ENABLED: get("AUTH_EMAIL_VERIFICATION_ENABLED"),
