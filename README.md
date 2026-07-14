@@ -43,17 +43,40 @@ pnpm dev
 | `MODE` | 固定使用 `mixed`（服务端多用户） |
 | `PROVIDER_CLOUDFLARE_BUILTIN` | 是否启用 CF 内置 AI |
 
-## Cloudflare Workers
+## Cloudflare Workers（GitHub Actions 部署）
+
+推送到 `main` 或手动触发 **Deploy Cloudflare Workers** workflow 自动构建并部署。
+
+### 1. 准备 Cloudflare 资源
+
+1. 创建 D1 数据库，把 `database_id` 写入 `wrangler.toml`
+2. 在 Cloudflare Dashboard 创建 API Token（权限：`Workers Scripts Edit`、`D1 Edit`、`Account Settings Read`）
+3. 在 Workers 环境变量 / Secrets 中配置（Dashboard 或 `wrangler secret put`）：
+   - `ADMIN_EMAIL` / `ADMIN_PASSWORD`（首个管理员）
+   - 其他可选 AUTH_* 变量
+
+### 2. 配置 GitHub Secrets
+
+仓库 → Settings → Secrets and variables → Actions：
+
+| Secret | 说明 |
+|--------|------|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID |
+
+### 3. 部署
+
+- **自动**：`git push origin main`
+- **手动**：Actions → Deploy Cloudflare Workers → Run workflow
+
+本地调试仍可用：
 
 ```bash
-# 修改 wrangler.toml 中的 D1 database_id
 pnpm build
-pnpm db:migrate:worker
-# 设置 secrets / vars：ADMIN_EMAIL、ADMIN_PASSWORD
 pnpm deploy
 ```
 
-`wrangler.toml` 中 `MODE` 已改为 `mixed`。
+`wrangler.toml` 中 `MODE` 为 `mixed`。
 
 ## 使用说明
 
