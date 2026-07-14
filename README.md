@@ -56,7 +56,9 @@ Cloudflare Dashboard → **Workers & Pages → D1** → 创建数据库（名称
 
 记下 **API Token** 与 Dashboard 右侧的 **Account ID**。
 
-### 步骤 3：配置 GitHub Secrets
+### 步骤 3：配置 GitHub Secrets（含管理员密码）
+
+只需在 GitHub 配置，**部署时会自动同步到 Worker**，无需再去 Cloudflare Dashboard 手填密码。
 
 仓库 → **Settings → Secrets and variables → Actions**，新增：
 
@@ -65,6 +67,8 @@ Cloudflare Dashboard → **Workers & Pages → D1** → 创建数据库（名称
 | `CLOUDFLARE_API_TOKEN` | API Token |
 | `CLOUDFLARE_ACCOUNT_ID` | Account ID |
 | `CLOUDFLARE_D1_DATABASE_ID` | D1 Database ID（UUID） |
+| `ADMIN_PASSWORD` | 默认管理员 `admin` 的密码（部署时自动写入 Worker Secret） |
+| `WORKER_URL` | 可选，Worker 访问地址，用于部署后自动 bootstrap |
 
 CI 会在运行时把 `CLOUDFLARE_D1_DATABASE_ID` 注入到临时 `wrangler.toml`，不会回写仓库。
 

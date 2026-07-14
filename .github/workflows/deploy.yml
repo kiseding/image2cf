@@ -38,10 +38,9 @@ jobs:
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
         run: |
           if [ -z "$CLOUDFLARE_D1_DATABASE_ID" ]; then
-            echo "Missing secret: CLOUDFLARE_D1_DATABASE_ID"
+            echo "Missing GitHub secret: CLOUDFLARE_D1_DATABASE_ID"
             exit 1
           fi
-          # Patch only the in-runner config; never commit real IDs
           node -e "
             const fs = require('fs');
             const id = process.env.CLOUDFLARE_D1_DATABASE_ID;
@@ -70,3 +69,44 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # GitHub Secret → Cloudflare Worker Secret (same as other projects)
+      - name: Sync ADMIN_PASSWORD to Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          if [ -z "$ADMIN_PASSWORD" ]; then
+            echo "Missing GitHub secret: ADMIN_PASSWORD"
+            echo "Add it under Repo → Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          # stdin form avoids echoing secret in process list logs
+          printf '%s' "$ADMIN_PASSWORD" | pnpm exec wrangler secret put ADMIN_PASSWORD
+          echo "ADMIN_PASSWORD synced to Worker"
+
+      - name: Bootstrap admin account
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+        run: |
+          # Prefer explicit WORKER_URL secret; fallback to workers.dev name from wrangler.toml
+          URL="${WORKER_URL:-}"
+          if [ -z "$URL" ]; then
+            NAME=$(node -e "const t=require('fs').readFileSync('wrangler.toml','utf8'); const m=t.match(/^name\\s*=\\s*\"([^\"]+)\"/m); console.log(m?m[1]:'image2cf')")
+            URL="https://${NAME}.kiseding.workers.dev"
+          fi
+          echo "Bootstrapping via $URL/api/setup/bootstrap"
+          # retry a few times (secret propagation / cold start)
+          for i in 1 2 3 4 5; do
+            CODE=$(curl -sS -o /tmp/boot.json -w "%{http_code}" -X POST "$URL/api/setup/bootstrap" || true)
+            echo "attempt $i http=$CODE body=$(cat /tmp/boot.json 2>/dev/null || true)"
+            if [ "$CODE" = "200" ]; then
+              curl -sS "$URL/api/setup/status" || true
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Bootstrap request failed (deploy still succeeded). Open the site once or POST /api/setup/bootstrap manually."

@@ -41,6 +41,8 @@ Permissions: Workers Edit, D1 Edit, Account Settings Read. Note **Token** and **
 | `CLOUDFLARE_API_TOKEN` | API token |
 | `CLOUDFLARE_ACCOUNT_ID` | Account ID |
 | `CLOUDFLARE_D1_DATABASE_ID` | D1 database UUID |
+| `ADMIN_PASSWORD` | Password for default admin `admin` (synced to Worker Secret on deploy) |
+| `WORKER_URL` | Optional Worker URL for post-deploy bootstrap |
 
 CI injects the D1 ID into a temporary `wrangler.toml` at runtime (never committed).
 
