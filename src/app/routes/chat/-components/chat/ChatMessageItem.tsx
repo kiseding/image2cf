@@ -150,9 +150,16 @@ export function ChatMessageItem({
 					});
 
 					if (status) {
-						// Update only the generation field
+						// Lift progress from parameters if top-level missing
+						const gen = {
+							...status,
+							progress:
+								(status as any).progress ||
+								(status as any).parameters?.progress ||
+								undefined,
+						};
 						onMessageUpdate(message.id, {
-							generation: status,
+							generation: gen,
 						});
 
 						// Stop polling if generation is complete or failed

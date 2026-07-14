@@ -98,7 +98,7 @@ const storageHandlers: Record<
 const MAX_INLINE_DATA_URI_CHARS = 800_000;
 
 export const saveFiles = async (fileDatas: string[], userId: string) => {
-	const { db } = getContext();
+	const { db, R2 } = getContext();
 
 	if (!fileDatas?.length) {
 		return [];
@@ -108,38 +108,48 @@ export const saveFiles = async (fileDatas: string[], userId: string) => {
 
 	const values = await Promise.all(
 		fileDatas.map(async (file) => {
-			let storage: Storage = mode;
-			let url = file;
-			const { R2 } = getContext();
-			const useR2 = mode === "r2" || !!R2;
-
-			if (useR2 && (mode === "r2" || file.startsWith("data:") || /^https?:\/\//i.test(file))) {
-				// Prefer R2 for binary payloads and remote images when available
-				if (mode === "r2" || file.startsWith("data:") || /^https?:\/\//i.test(file)) {
-					try {
-						storage = "r2";
-						url = await storageHandlers.r2.save(file, userId);
-					} catch (e) {
-						if (file.startsWith("data:") && file.length > MAX_INLINE_DATA_URI_CHARS) {
-							throw e;
-						}
-						// Fall back to base64/url string storage for small payloads
-						storage = "base64";
-						url = await storageHandlers.base64.save(file, userId);
-					}
-				}
-			} else if (file.startsWith("data:") && file.length > MAX_INLINE_DATA_URI_CHARS) {
-				throw new Error(
-					`Image data too large for database storage (${Math.round(file.length / 1024)}KB). Enable R2 (FILE_STORAGE=r2).`,
-				);
-			} else {
-				url = await storageHandlers[storage].save(file, userId);
+			// 1) Remote URL from relay — store pointer only (never re-download into R2).
+			//    Re-download was a common hang: relay finished, worker stuck fetching/uploading.
+			if (/^https?:\/\//i.test(file)) {
+				return {
+					userId,
+					storage: "base64" as Storage, // schema: free-form URL stored in url column
+					url: file,
+				};
 			}
 
+			// 2) data URI / raw base64 — prefer R2
+			if (file.startsWith("data:") || file.length > 200) {
+				if (R2 && (mode === "r2" || mode === "base64")) {
+					try {
+						const r2url = await storageHandlers.r2.save(file, userId);
+						return { userId, storage: "r2" as Storage, url: r2url };
+					} catch (e) {
+						console.error("[storage] R2 put failed, trying inline", e);
+						if (file.length > MAX_INLINE_DATA_URI_CHARS) {
+							throw e instanceof Error
+								? e
+								: new Error("R2 upload failed and image too large for D1");
+						}
+					}
+				}
+				if (file.length > MAX_INLINE_DATA_URI_CHARS) {
+					throw new Error(
+						`Image data too large for database storage (${Math.round(file.length / 1024)}KB). Enable R2.`,
+					);
+				}
+				return {
+					userId,
+					storage: "base64" as Storage,
+					url: await storageHandlers.base64.save(file, userId),
+				};
+			}
+
+			// 3) fallback
 			return {
 				userId,
-				storage,
-				url,
+				storage: mode,
+				url: await storageHandlers[mode].save(file, userId),
 			};
 		}),
 	);

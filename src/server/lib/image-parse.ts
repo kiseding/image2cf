@@ -68,8 +68,8 @@ export async function extractImagesFromAny(json: any, opts?: { preferUrl?: boole
 		}
 		if (typeof v === "object") {
 			// common image fields first
-			const urlKeys = ["url", "image_url", "imageUrl", "image", "src", "href"];
-			const b64Keys = ["b64_json", "b64", "base64", "image_base64", "imageBase64", "result"];
+			const urlKeys = ["url", "image_url", "imageUrl", "image", "src", "href", "file_url", "fileUrl"];
+			const b64Keys = ["b64_json", "b64", "base64", "image_base64", "imageBase64", "result", "image_data", "imageData"];
 			for (const k of urlKeys) {
 				const val = v[k];
 				if (typeof val === "string") {

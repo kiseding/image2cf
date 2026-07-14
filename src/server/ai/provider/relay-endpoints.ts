@@ -63,9 +63,42 @@ const sizeMap: Record<string, string> = {
 	"3:4": "1024x1536",
 };
 
+/** Relay fetch timeout (ms). Worker waitUntil also has limits; fail cleanly instead of hanging UI. */
+const RELAY_FETCH_TIMEOUT_MS = 120_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = RELAY_FETCH_TIMEOUT_MS) {
+	const ctrl = new AbortController();
+	const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+	try {
+		return await fetch(url, { ...init, signal: ctrl.signal });
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function parseOkResponse(text: string, json: any): Promise<TypixChatApiResponse> {
+	const images = await extractImagesFromAny(json, { preferUrl: true });
+	if (images.length) return { images };
+	if (text.startsWith("http") || text.startsWith("data:image")) {
+		return { images: [text.trim()] };
+	}
+	// Some relays wrap JSON as string
+	if (typeof json === "string") {
+		try {
+			const nested = JSON.parse(json);
+			const imgs2 = await extractImagesFromAny(nested, { preferUrl: true });
+			if (imgs2.length) return { images: imgs2 };
+		} catch {
+			/* ignore */
+		}
+	}
+	console.error("[relay] ok but no images parsed:", text.slice(0, 800));
+	return { errorReason: "API_ERROR", images: [] };
+}
+
 /**
  * Call OpenAI-compatible image endpoints with custom paths.
- * Prefer URL responses (lighter) over huge base64 in D1.
+ * Prefer URL responses when possible; always accept b64_json too.
  */
 export async function generateViaEndpointPaths(params: {
 	baseURL: string;
@@ -92,26 +125,28 @@ export async function generateViaEndpointPaths(params: {
 	const width = params.request.width;
 	const height = params.request.height;
 
+	const baseBody = {
+		model,
+		prompt: params.request.prompt,
+		n,
+		...(size ? { size } : {}),
+		...(width ? { width } : {}),
+		...(height ? { height } : {}),
+	};
+
 	try {
 		let resp: Response;
 
 		if (kind === "t2i") {
-			// Prefer url so we can store short https links in D1 (base64 often exceeds D1 row limit)
-			resp = await fetch(url, {
+			// Do NOT force response_format first — many Chinese relays reject or ignore it.
+			// Prefer natural response (url or b64_json). Retry with url / without format if needed.
+			resp = await fetchWithTimeout(url, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${params.apiKey}`,
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({
-					model,
-					prompt: params.request.prompt,
-					n,
-					...(size ? { size } : {}),
-					...(width ? { width } : {}),
-					...(height ? { height } : {}),
-					response_format: "url",
-				}),
+				body: JSON.stringify(baseBody),
 			});
 		} else {
 			const form = new FormData();
@@ -121,18 +156,15 @@ export async function generateViaEndpointPaths(params: {
 			if (size) form.append("size", size);
 			if (width) form.append("width", String(width));
 			if (height) form.append("height", String(height));
-			form.append("response_format", "url");
 
 			const images = params.request.images || [];
 			if (images[0]) {
-				// images may be https URL or data URI
-				let dataUri = images[0];
+				const dataUri = images[0];
 				if (dataUri.startsWith("http")) {
-					// multipart needs file bytes — fetch
-					const r = await fetch(dataUri);
+					const r = await fetchWithTimeout(dataUri, {}, 30_000);
 					const buf = await r.arrayBuffer();
 					const mime = r.headers.get("content-type") || "image/png";
-					const ext = mime.split("/")[1] || "png";
+					const ext = (mime.split("/")[1] || "png").split(";")[0] || "png";
 					form.append("image", new Blob([buf], { type: mime }), `image.${ext}`);
 				} else {
 					const { blob, filename } = dataUriToBlob(dataUri);
@@ -142,7 +174,7 @@ export async function generateViaEndpointPaths(params: {
 			for (let i = 1; i < images.length; i++) {
 				const img = images[i]!;
 				if (img.startsWith("http")) {
-					const r = await fetch(img);
+					const r = await fetchWithTimeout(img, {}, 30_000);
 					const buf = await r.arrayBuffer();
 					const mime = r.headers.get("content-type") || "image/png";
 					form.append("image[]", new Blob([buf], { type: mime }), `image${i}.png`);
@@ -153,7 +185,7 @@ export async function generateViaEndpointPaths(params: {
 				}
 			}
 
-			resp = await fetch(url, {
+			resp = await fetchWithTimeout(url, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${params.apiKey}`,
@@ -172,26 +204,16 @@ export async function generateViaEndpointPaths(params: {
 
 		if (!resp.ok) {
 			const msg = json?.error?.message || json?.message || text.slice(0, 300);
-			// Some relays reject response_format=url — retry once without it / with b64
-			if (
-				kind === "t2i" &&
-				/response_format|unknown|invalid/i.test(String(msg)) &&
-				!params.preferEdit
-			) {
-				const retry = await fetch(url, {
+
+			// Retry t2i once with response_format=url if first failed on format issues
+			if (kind === "t2i" && /response_format|unknown|invalid|format/i.test(String(msg))) {
+				const retry = await fetchWithTimeout(url, {
 					method: "POST",
 					headers: {
 						Authorization: `Bearer ${params.apiKey}`,
 						"Content-Type": "application/json",
 					},
-					body: JSON.stringify({
-						model,
-						prompt: params.request.prompt,
-						n,
-						...(size ? { size } : {}),
-						...(width ? { width } : {}),
-						...(height ? { height } : {}),
-					}),
+					body: JSON.stringify({ ...baseBody, response_format: "b64_json" }),
 				});
 				const retryText = await retry.text();
 				let retryJson: any = null;
@@ -201,10 +223,7 @@ export async function generateViaEndpointPaths(params: {
 					/* ignore */
 				}
 				if (retry.ok) {
-					const imgs = await extractImagesFromAny(retryJson, { preferUrl: true });
-					if (imgs.length) return { images: imgs };
-					console.error("[relay] ok but no images parsed (retry):", retryText.slice(0, 500));
-					return { errorReason: "API_ERROR", images: [] };
+					return await parseOkResponse(retryText, retryJson);
 				}
 			}
 
@@ -221,18 +240,14 @@ export async function generateViaEndpointPaths(params: {
 			return { errorReason: "API_ERROR", images: [] };
 		}
 
-		const images = await extractImagesFromAny(json, { preferUrl: true });
-		if (!images.length) {
-			// raw text might be a lone data-uri or url
-			if (text.startsWith("http") || text.startsWith("data:image")) {
-				return { images: [text.trim()] };
-			}
-			console.error("[relay] ok but no images parsed:", text.slice(0, 800));
-			return { errorReason: "API_ERROR", images: [] };
+		return await parseOkResponse(text, json);
+	} catch (e: any) {
+		const name = e?.name || "";
+		const msg = e?.message || String(e);
+		console.error(`[relay] ${kind} request error:`, msg);
+		if (name === "AbortError" || /aborted|timeout/i.test(msg)) {
+			return { errorReason: "TIMEOUT", images: [] };
 		}
-		return { images };
-	} catch (e) {
-		console.error(`[relay] ${kind} request error:`, e);
 		return { errorReason: "UNKNOWN", images: [] };
 	}
 }

@@ -604,7 +604,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			soft = Math.min(78, soft + 3);
 			void setGenerationProgress(generationId, "calling_api", soft, {
 				message: "waiting_upstream",
-			});
+			}).catch(() => {});
 		}, 2500);
 
 		let result;
@@ -979,17 +979,17 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	const height = params?.height;
 	const aspectRatio = params?.aspectRatio;
 
+	// Capture context at claim time — waitUntil may outlive the request;
+	// getContext() is a module singleton and must still point at D1/R2 bindings.
 	const run = async () => {
-		// Heartbeat while running (best-effort)
 		const hb = setInterval(() => {
 			void db
 				.update(messageGenerations)
 				.set({ updatedAt: new Date().toISOString() })
 				.where(and(eq(messageGenerations.id, generation.id), eq(messageGenerations.status, "generating")));
-		}, 60_000);
+		}, 45_000);
 
 		try {
-			// Re-check chat still exists before spending API call
 			const still = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
 			if (!still) {
 				await db
@@ -1017,7 +1017,22 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 				ctx,
 			);
 
-			// If chat deleted during generation, purge leftover files
+			// Safety net: if still generating after execute (should not happen), mark failed
+			const gAfter = await db.query.messageGenerations.findFirst({
+				where: eq(messageGenerations.id, generation.id),
+			});
+			if (gAfter && (gAfter.status === "generating" || gAfter.status === "pending")) {
+				console.error("[generate] left in", gAfter.status, "after execute — marking TIMEOUT");
+				await db
+					.update(messageGenerations)
+					.set({
+						status: "failed",
+						errorReason: "TIMEOUT",
+						updatedAt: new Date().toISOString(),
+					})
+					.where(eq(messageGenerations.id, generation.id));
+			}
+
 			const after = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
 			if (!after) {
 				const g = await db.query.messageGenerations.findFirst({
@@ -1029,14 +1044,18 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 			}
 		} catch (e) {
 			console.error("createMessageGenerate background error:", e);
-			await db
-				.update(messageGenerations)
-				.set({
-					status: "failed",
-					errorReason: "UNKNOWN",
-					updatedAt: new Date().toISOString(),
-				})
-				.where(eq(messageGenerations.id, generation.id));
+			try {
+				await db
+					.update(messageGenerations)
+					.set({
+						status: "failed",
+						errorReason: "UNKNOWN",
+						updatedAt: new Date().toISOString(),
+					})
+					.where(eq(messageGenerations.id, generation.id));
+			} catch (e2) {
+				console.error("failed to mark generation failed:", e2);
+			}
 		} finally {
 			clearInterval(hb);
 		}
