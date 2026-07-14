@@ -74,8 +74,7 @@ CI 会在运行时把 `CLOUDFLARE_D1_DATABASE_ID` 注入到临时 `wrangler.toml
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `ADMIN_USERNAME` | ✅ | 首个管理员用户名（用户表为空时自动创建） |
-| `ADMIN_PASSWORD` | ✅ | 首个管理员密码（建议用 Secret） |
+| `ADMIN_PASSWORD` | ✅ | 默认管理员 `admin` 的密码（建议用 Secret） |
 | `ADMIN_NAME` | | 显示名，默认 `Admin` |
 | `ADMIN_FORCE_RESET` | | 设为 `true` 可强制把管理员密码重置为 `ADMIN_PASSWORD`（修好后请删掉） |
 
@@ -88,11 +87,10 @@ export CLOUDFLARE_API_TOKEN=...
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_D1_DATABASE_ID=...
 
-npx wrangler secret put ADMIN_USERNAME
 npx wrangler secret put ADMIN_PASSWORD
 ```
 
-> `ADMIN_*` 仅在数据库尚无用户时用于引导创建管理员，之后请用后台「用户管理」维护账号。
+> `ADMIN_*` 用于引导/修复默认管理员 `admin`（可用 `ADMIN_FORCE_RESET` 重置密码），之后请用后台「用户管理」维护账号。
 
 ### 步骤 5：触发部署
 
@@ -132,9 +130,7 @@ cp .env.node.example .env
 
 ```env
 DATABASE_URL="file:./db.sqlite"
-ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="change-me"
-ADMIN_NAME="Admin"
 MODE="mixed"
 FILE_STORAGE="base64"
 ```
@@ -160,7 +156,6 @@ pnpm dev
 
 | 变量 | 说明 |
 |------|------|
-| `ADMIN_USERNAME` | 引导管理员用户名 |
 | `ADMIN_PASSWORD` | 引导管理员密码 |
 | `ADMIN_NAME` | 管理员显示名 |
 | `PROVIDER_CLOUDFLARE_BUILTIN` | 是否用内置 Workers AI（`wrangler.toml` 默认 `true`，可用 Dashboard 覆盖） |
@@ -170,7 +165,6 @@ pnpm dev
 | 变量 | 说明 |
 |------|------|
 | `DATABASE_URL` | 如 `file:./db.sqlite` |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` / `ADMIN_NAME` | 引导管理员 |
 | `MODE` | 使用 `mixed` |
 | `FILE_STORAGE` | `base64` / `disk` / `r2` |
 
@@ -178,7 +172,7 @@ pnpm dev
 
 ## 使用指南
 
-1. 使用 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录  
+1. 使用用户名 `admin` + `ADMIN_PASSWORD` 登录  
 2. **设置 → 用户管理**：创建用户（无公开注册）  
 3. **设置 → 中转站**：配置 Base URL、API Key、模型  
 4. **设置 → AI 提供商**：配置系统内置提供商（可选）  

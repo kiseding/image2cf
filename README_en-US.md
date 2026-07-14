@@ -50,8 +50,7 @@ After first deploy → **Workers → image2cf → Variables and Secrets**:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ADMIN_USERNAME` | ✅ | Bootstrap admin username |
-| `ADMIN_PASSWORD` | ✅ | Bootstrap admin password |
+| `ADMIN_PASSWORD` | ✅ | Password for default admin user `admin` |
 | `ADMIN_NAME` | | Display name |
 
 Deploy uses `--keep-vars` so Dashboard vars/secrets are preserved.
@@ -77,7 +76,7 @@ pnpm install && pnpm build && pnpm deploy
 
 ```bash
 cp .env.node.example .env
-# set DATABASE_URL, ADMIN_USERNAME, ADMIN_PASSWORD, MODE=mixed
+# set DATABASE_URL, ADMIN_PASSWORD, MODE=mixed
 pnpm db:push && pnpm dev
 ```
 

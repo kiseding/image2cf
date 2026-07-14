@@ -31,8 +31,7 @@ binding = "AI"
 #         Authenticated users benefit from cross-device data sync and server-side data persistence.
 #         Provides the best of both worlds: instant local access with optional cloud features.
 MODE = "mixed"
-# Bootstrap admin (set via Dashboard Variables/Secrets — do not commit secrets)
-# ADMIN_USERNAME = "admin"
+# Bootstrap admin (username fixed as "admin"; set via Dashboard Secrets)
 # ADMIN_PASSWORD = "change-me"
 # ADMIN_NAME = "Admin"
 # ADMIN_FORCE_RESET = "true"   # set true once to reset admin password, then remove
