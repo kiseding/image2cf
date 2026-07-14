@@ -424,6 +424,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				baseURL: relay!.baseURL,
 				apiKey: relay!.apiKey,
 				modelId,
+				apiMode: relay!.apiMode || "auto",
 			});
 		} else {
 			const providerInstance = getProviderById(providerId);

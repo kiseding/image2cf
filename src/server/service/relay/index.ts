@@ -25,6 +25,8 @@ export const CreateRelaySchema = z.object({
 	baseURL: z.string().url(),
 	apiKey: z.string().min(1),
 	models: z.array(RelayModelSchema).min(1),
+	/** OpenAI-compatible only: auto | images | responses */
+	apiMode: z.enum(["auto", "images", "responses"]).default("auto"),
 	enabled: z.boolean().default(true),
 });
 export type CreateRelay = z.infer<typeof CreateRelaySchema>;
@@ -36,6 +38,7 @@ export const UpdateRelaySchema = z.object({
 	baseURL: z.string().url().optional(),
 	apiKey: z.string().min(1).optional(),
 	models: z.array(RelayModelSchema).min(1).optional(),
+	apiMode: z.enum(["auto", "images", "responses"]).optional(),
 	enabled: z.boolean().optional(),
 });
 export type UpdateRelay = z.infer<typeof UpdateRelaySchema>;
@@ -73,6 +76,7 @@ const listRelays = async (ctx: RequestContext) => {
 		apiKey: r.apiKey ? `${r.apiKey.slice(0, 4)}****${r.apiKey.slice(-4)}` : "",
 		hasApiKey: !!r.apiKey,
 		models: (r.models as RelayModel[]) || [],
+		apiMode: (r as any).apiMode || "auto",
 		enabled: r.enabled,
 		createdAt: r.createdAt,
 		updatedAt: r.updatedAt,
@@ -94,6 +98,7 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 		baseURL: row.baseURL,
 		apiKey: row.apiKey,
 		models: (row.models as RelayModel[]) || [],
+		apiMode: (row as any).apiMode || "auto",
 		enabled: row.enabled,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
@@ -111,6 +116,7 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			baseURL: normalizeRelayBaseURL(req.type, req.baseURL),
 			apiKey: req.apiKey.trim(),
 			models: req.models,
+			apiMode: req.type === "openai" ? req.apiMode || "auto" : "auto",
 			enabled: req.enabled,
 		})
 		.returning();
@@ -135,6 +141,7 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 			...(req.baseURL !== undefined ? { baseURL: normalizeRelayBaseURL(nextType, req.baseURL) } : {}),
 			...(req.apiKey !== undefined ? { apiKey: req.apiKey.trim() } : {}),
 			...(req.models !== undefined ? { models: req.models } : {}),
+			...(req.apiMode !== undefined ? { apiMode: req.apiMode } : {}),
 			...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
 			updatedAt: new Date().toISOString(),
 		})
@@ -330,6 +337,7 @@ const resolveRelayForGeneration = async (providerId: string, ctx: RequestContext
 		baseURL: row.baseURL,
 		apiKey: row.apiKey,
 		models: (row.models as RelayModel[]) || [],
+		apiMode: ((row as any).apiMode || "auto") as "auto" | "images" | "responses",
 	};
 };
 

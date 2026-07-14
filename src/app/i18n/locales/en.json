@@ -152,11 +152,11 @@
 			"preset": "Preset",
 			"presetPlaceholder": "Choose a preset or custom",
 			"custom": "Custom",
-			"openaiBaseHint": "OpenAI-compatible base should end with /v1, e.g. https://api.xxx.com/v1",
+			"openaiBaseHint": "OpenAI-compatible base ends with /v1. Images uses /images/*, Responses uses /responses",
 			"googleBaseHint": "Google-compatible base is host root, e.g. https://api.xxx.com (no /v1)",
 			"formTitle": "Image relays",
 			"genericHint": "Image generation only: connect any OpenAI / Google-compatible relay image models. Switch stations by changing Base URL + API Key, then fetch or enter image model IDs.",
-			"step1": "Pick protocol (OpenAI images or Google images)",
+			"step1": "Pick protocol: OpenAI images or Google images",
 			"step2": "Enter relay Base URL",
 			"step3": "Enter API Key",
 			"step4": "Configure image models (test / fetch image models / bulk import)",
@@ -171,7 +171,12 @@
 			"probeOk": "Connected",
 			"probeFailed": "Connection failed",
 			"importedModels": "Imported {{count}} image models (editable)",
-			"docsTip": "See your relay docs, e.g."
+			"docsTip": "See your relay docs, e.g.",
+			"apiMode": "Image API mode",
+			"apiModeAuto": "Auto (recommended)",
+			"apiModeImages": "Images API · /v1/images/*",
+			"apiModeResponses": "Responses API · /v1/responses",
+			"apiModeHint": "Some relays need Responses for gpt-image; classic DALL·E uses Images. Auto picks and falls back."
 		},
 		"users": {
 			"title": "User Management",

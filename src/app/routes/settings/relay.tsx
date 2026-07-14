@@ -32,6 +32,8 @@ type RelayForm = {
 	type: RelayProtocol;
 	baseURL: string;
 	apiKey: string;
+	/** OpenAI-compatible API style */
+	apiMode: "auto" | "images" | "responses";
 	enabled: boolean;
 	models: RelayModelForm[];
 };
@@ -41,6 +43,7 @@ const emptyForm: RelayForm = {
 	type: "openai",
 	baseURL: "",
 	apiKey: "",
+	apiMode: "auto",
 	enabled: true,
 	models: [{ id: "", name: "", ability: "i2i", maxInputImages: 1 }],
 };
@@ -78,6 +81,7 @@ function RelaySettingsPage() {
 				type: detail.type as RelayProtocol,
 				baseURL: detail.baseURL,
 				apiKey: detail.apiKey,
+				apiMode: (detail.apiMode as RelayForm["apiMode"]) || "auto",
 				enabled: detail.enabled,
 				models: (detail.models as RelayModelForm[]).length
 					? (detail.models as RelayModelForm[])
@@ -111,6 +115,7 @@ function RelaySettingsPage() {
 					type: form.type,
 					baseURL: form.baseURL,
 					apiKey: form.apiKey,
+					apiMode: form.apiMode,
 					enabled: form.enabled,
 					models,
 				});
@@ -120,6 +125,7 @@ function RelaySettingsPage() {
 					type: form.type,
 					baseURL: form.baseURL,
 					apiKey: form.apiKey,
+					apiMode: form.apiMode,
 					enabled: form.enabled,
 					models,
 				});
@@ -289,7 +295,9 @@ function RelaySettingsPage() {
 									</div>
 									<p className="truncate font-mono text-muted-foreground text-xs">{relay.baseURL}</p>
 									<p className="text-muted-foreground text-xs">
-										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })} · API Key: {relay.apiKey}
+										{t("settings.relay.modelCount", { count: relay.models?.length || 0 })}
+										{relay.type === "openai" ? ` · ${relay.apiMode || "auto"}` : ""} · API Key:{" "}
+										{relay.apiKey}
 									</p>
 								</div>
 								<div className="flex items-center gap-2">
@@ -358,6 +366,28 @@ function RelaySettingsPage() {
 								placeholder="sk-..."
 							/>
 						</div>
+
+						{form.type === "openai" && (
+							<div className="space-y-2">
+								<Label>{t("settings.relay.apiMode")}</Label>
+								<Select
+									value={form.apiMode}
+									onValueChange={(v) =>
+										setForm((p) => ({ ...p, apiMode: v as RelayForm["apiMode"] }))
+									}
+								>
+									<SelectTrigger>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="auto">{t("settings.relay.apiModeAuto")}</SelectItem>
+										<SelectItem value="images">{t("settings.relay.apiModeImages")}</SelectItem>
+										<SelectItem value="responses">{t("settings.relay.apiModeResponses")}</SelectItem>
+									</SelectContent>
+								</Select>
+								<p className="text-muted-foreground text-xs">{t("settings.relay.apiModeHint")}</p>
+							</div>
+						)}
 
 						<div className="flex flex-wrap gap-2">
 							<Button type="button" variant="outline" size="sm" disabled={probing} onClick={() => handleProbe(false)}>

@@ -6,7 +6,7 @@ export const userRelays = sqliteTable("user_relays", {
 	id: text().$defaultFn(generateId).primaryKey(),
 	userId: text().notNull(),
 	name: text().notNull(),
-	// openai: OpenAI Images API compatible; google: Google GenAI compatible
+	// openai: OpenAI-compatible; google: Google GenAI compatible
 	type: text({ enum: ["openai", "google"] })
 		.default("openai")
 		.notNull(),
@@ -14,6 +14,10 @@ export const userRelays = sqliteTable("user_relays", {
 	apiKey: text().notNull(),
 	// JSON array: { id, name, ability?: "t2i"|"i2i", maxInputImages?: number, supportedAspectRatios?: string[] }[]
 	models: text({ mode: "json" }).notNull(),
+	// OpenAI-compatible API style: auto | images | responses
+	apiMode: text({ enum: ["auto", "images", "responses"] })
+		.default("auto")
+		.notNull(),
 	enabled: integer({ mode: "boolean" }).default(true).notNull(),
 	...metaFields,
 });

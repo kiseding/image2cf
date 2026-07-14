@@ -152,11 +152,11 @@
 			"preset": "快速预设",
 			"presetPlaceholder": "选择预设或自定义",
 			"custom": "自定义",
-			"openaiBaseHint": "OpenAI 兼容请填到 /v1，例如 https://api.xxx.com/v1",
+			"openaiBaseHint": "OpenAI 兼容填到 /v1。Images 用 /images/*，Responses 用 /responses",
 			"googleBaseHint": "Google 兼容填主机根地址，例如 https://api.xxx.com（不要加 /v1）",
 			"formTitle": "生图中转站",
 			"genericHint": "专注 AI 生图：接入任意 OpenAI / Google 兼容中转的「图片模型」。换站只改 Base URL 和 API Key，再拉取或手填生图模型 ID。",
-			"step1": "选择协议（OpenAI 生图 或 Google 生图）",
+			"step1": "选择协议：OpenAI 生图 或 Google 生图",
 			"step2": "填写中转站 Base URL",
 			"step3": "填写 API Key",
 			"step4": "配置生图模型（测试连接 / 拉取生图模型 / 批量导入）",
@@ -171,7 +171,12 @@
 			"probeOk": "连接成功",
 			"probeFailed": "连接失败",
 			"importedModels": "已导入 {{count}} 个生图模型（可再编辑）",
-			"docsTip": "配置说明可参考中转站文档，例如"
+			"docsTip": "配置说明可参考中转站文档，例如",
+			"apiMode": "生图 API 模式",
+			"apiModeAuto": "自动（推荐）",
+			"apiModeImages": "Images API · /v1/images/*",
+			"apiModeResponses": "Responses API · /v1/responses",
+			"apiModeHint": "部分中转（如 gpt-image）需用 Responses；经典 DALL·E 用 Images。自动会按模型选择并失败时回退。"
 		},
 		"users": {
 			"title": "用户管理",
