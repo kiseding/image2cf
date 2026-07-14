@@ -315,13 +315,9 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 					if (result.messages) {
 						const assistantMessage = result.messages.find((msg: any) => msg.role === "assistant");
 						if (assistantMessage?.generation?.id) {
-							// Mark as generating before triggering
+							// Server already starts generation via waitUntil on createMessage/createChat.
+							// Client only polls status — do not call createMessageGenerate again.
 							assistantMessage.generation.status = "generating";
-
-							// Fire and forget - don't await, let it run in background
-							chatService.createMessageGenerate({ generationId: assistantMessage.generation.id }).catch((error) => {
-								console.error("Error triggering image generation:", error);
-							});
 						}
 					}
 
@@ -471,12 +467,7 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 						};
 					}, false);
 
-					if (shouldTriggerGeneration) {
-						// Fire and forget - don't await, let it run in background
-						chatService.createMessageGenerate({ generationId: assistantMessage!.generation!.id }).catch((error) => {
-							console.error("Error triggering image generation:", error);
-						});
-					}
+					// Generation started server-side; UI polls getGenerationStatus only.
 				} else {
 					// Fallback: revalidate if no messages returned
 					await currentChatMutate();
@@ -601,18 +592,9 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 					};
 				}, false);
 
-				// Call the API
-				const result = await chatService.regenerateMessage({ messageId });
-
-				// Trigger image generation in browser (not blocked by CF Worker timeout)
-				if (result?.generationId) {
-					// Fire and forget - don't await, let it run in background
-					chatService.createMessageGenerate({ generationId: result.generationId }).catch((error) => {
-						console.error("Error triggering image generation:", error);
-					});
-				}
-
-				// The polling mechanism in ChatMessageItem will handle updating the UI
+				// Server regenerateMessage already starts generation via waitUntil.
+				// Client only polls status — do not call createMessageGenerate again.
+				await chatService.regenerateMessage({ messageId });
 			} catch (error) {
 				console.error("Failed to regenerate message:", error);
 				// Revert to failed state on error

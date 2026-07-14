@@ -951,8 +951,30 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 	// Prefer progress.startedAt — soft progress used to bump updatedAt and hide staleness
 	const startedAtIso = progress?.startedAt || generation.createdAt;
 	const ageMs = Date.now() - new Date(startedAtIso).getTime();
+	// Informational only — clients must NOT re-trigger generate on stale
 	const stale =
-		(generation.status === "pending" || generation.status === "generating") && ageMs > 90_000;
+		(generation.status === "pending" || generation.status === "generating") && ageMs > 150_000;
+
+	// Server-side: auto-fail very stale jobs so UI stops "generating" without a second bill
+	if (stale && (generation.status === "pending" || generation.status === "generating")) {
+		await db
+			.update(messageGenerations)
+			.set({
+				status: "failed",
+				errorReason: "TIMEOUT",
+				updatedAt: new Date().toISOString(),
+			})
+			.where(eq(messageGenerations.id, generation.id));
+		return {
+			...generation,
+			status: "failed" as const,
+			errorReason: "TIMEOUT" as const,
+			progress: { ...(progress || {}), phase: "failed", percent: 100, message: "timeout" },
+			stale: true,
+			ageMs,
+			resultUrls: undefined,
+		};
+	}
 
 	const resultUrls =
 		fileIdList.length > 0
@@ -998,27 +1020,37 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	if (generation.status === "completed") {
 		return { success: true, skipped: true, reason: "already_completed" as const };
 	}
-	// Already running — do not start a second job unless stale (waitUntil may have been killed)
+	// Already running: never auto re-call the relay (would double-bill / double-generate).
+	// Stale jobs are marked TIMEOUT; user can click retry.
 	if (generation.status === "generating") {
 		const params = (generation.parameters as any) || {};
 		const startedIso = params.progress?.startedAt || generation.createdAt || generation.updatedAt;
 		const started = new Date(startedIso).getTime();
 		const age = Date.now() - started;
-		// 90s by startedAt (not updatedAt — soft progress used to refresh updatedAt)
-		if (age < 90_000) {
+		if (age < 150_000) {
 			return { success: true, skipped: true, reason: "already_generating" as const };
 		}
-		console.warn("[generate] reclaiming stale generating job", generation.id, "ageMs", age);
+		console.warn("[generate] stale generating job — mark TIMEOUT, do not re-run", generation.id, "ageMs", age);
+		await db
+			.update(messageGenerations)
+			.set({
+				status: "failed",
+				errorReason: "TIMEOUT",
+				updatedAt: new Date().toISOString(),
+			})
+			.where(eq(messageGenerations.id, generation.id));
+		return { success: false, skipped: true, reason: "stale_timeout" as const };
 	}
-	// CAS claim: pending/failed always; generating only if we already decided it's stale above
-	const statusFilter =
-		generation.status === "generating"
-			? eq(messageGenerations.status, "generating")
-			: or(eq(messageGenerations.status, "pending"), eq(messageGenerations.status, "failed"));
+	// CAS claim: only pending or failed (retry). Never re-enter from generating.
 	const claim = await db
 		.update(messageGenerations)
 		.set({ status: "generating", updatedAt: new Date().toISOString(), errorReason: null as any })
-		.where(and(eq(messageGenerations.id, generation.id), statusFilter))
+		.where(
+			and(
+				eq(messageGenerations.id, generation.id),
+				or(eq(messageGenerations.status, "pending"), eq(messageGenerations.status, "failed")),
+			),
+		)
 		.returning();
 
 	if (!claim.length) {
