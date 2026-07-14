@@ -670,8 +670,22 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			imageCount: result.images.length,
 		});
 
-		// Save generated files to database (URLs preferred over huge base64)
-		const fileIds = await saveFiles(result.images, userId);
+		// Persist ASAP so UI can show images even if waitUntil is cut shortly after
+		let fileIds: string[] = [];
+		try {
+			fileIds = await saveFiles(result.images, userId);
+		} catch (saveErr) {
+			console.error("[generate] saveFiles error", saveErr);
+			// Last resort: if images are already http(s) URLs, store them without R2
+			const urls = result.images.filter((u) => /^https?:\/\//i.test(u));
+			if (urls.length) {
+				try {
+					fileIds = await saveFiles(urls, userId);
+				} catch (e2) {
+					console.error("[generate] saveFiles fallback failed", e2);
+				}
+			}
+		}
 		if (!fileIds.length) {
 			await setGenerationProgress(generationId, "failed", 100, { message: "save_failed" });
 			await db
@@ -693,11 +707,12 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				})
 			)?.parameters || {};
 
+		// Atomic complete — include fileIds as plain string array for D1 json column
 		await db
 			.update(messageGenerations)
 			.set({
 				status: "completed",
-				fileIds,
+				fileIds: [...fileIds],
 				generationTime: Date.now() - now.getTime(),
 				parameters: {
 					...(prevParams as any),
@@ -706,11 +721,14 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 						percent: 100,
 						updatedAt: new Date().toISOString(),
 						message: "done",
+						saved: fileIds.length,
 					},
 				} as any,
-				updatedAt: now.toISOString(),
+				updatedAt: new Date().toISOString(),
 			})
 			.where(eq(messageGenerations.id, generationId));
+
+		console.log("[generate] completed", generationId, "files", fileIds.length);
 	} catch (error) {
 		console.error("Error generating image:", error);
 		const msg = error instanceof Error ? error.message : String(error);
@@ -834,11 +852,11 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 	}
 
 	// Kick off generation in background when executionCtx is available (preferred path).
-	// Client may still call createMessageGenerate; that path is idempotent.
+	// blockGenerate=true so outer waitUntil waits for the FULL run (not just claim+return).
 	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
 	if (exec?.waitUntil && generation) {
 		exec.waitUntil(
-			createMessageGenerate({ generationId: generation.id }, ctx).catch((e) =>
+			createMessageGenerate({ generationId: generation.id }, { ...ctx, blockGenerate: true } as any).catch((e) =>
 				console.error("auto createMessageGenerate failed", e),
 			),
 		);
@@ -876,16 +894,45 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 	// Read-only status (do not mutate TIMEOUT here — races with in-flight generation)
 	const params = (generation.parameters as any) || {};
 	const progress = params.progress || null;
+	const rawIds = generation.fileIds;
+	const fileIdList: string[] = Array.isArray(rawIds)
+		? (rawIds as string[])
+		: typeof rawIds === "string"
+			? (() => {
+					try {
+						const p = JSON.parse(rawIds);
+						return Array.isArray(p) ? p : [];
+					} catch {
+						return [];
+					}
+				})()
+			: [];
+
+	const ageMs = Date.now() - new Date(generation.updatedAt).getTime();
+	const stale =
+		(generation.status === "pending" || generation.status === "generating") && ageMs > 90_000;
+
+	const resultUrls =
+		fileIdList.length > 0
+			? (
+					await Promise.all(
+						fileIdList.map(async (fileId) => {
+							try {
+								return await getFileUrl(fileId, userId);
+							} catch {
+								return null;
+							}
+						}),
+					)
+				).filter(Boolean)
+			: undefined;
+
 	return {
 		...generation,
 		progress,
-		resultUrls: generation.fileIds
-			? await Promise.all(
-					(generation.fileIds as string[]).map(async (fileId) => {
-						return await getFileUrl(fileId, userId);
-					}),
-				)
-			: undefined,
+		stale,
+		ageMs,
+		resultUrls: resultUrls?.length ? resultUrls : undefined,
 	};
 };
 
@@ -909,13 +956,14 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	if (generation.status === "completed") {
 		return { success: true, skipped: true, reason: "already_completed" as const };
 	}
-	// Already running — do not start a second job
+	// Already running — do not start a second job unless stale (waitUntil may have been killed)
 	if (generation.status === "generating") {
 		const started = new Date(generation.updatedAt).getTime();
-		// Stale lock > 10 minutes → allow reclaim
-		if (Date.now() - started < 10 * 60 * 1000) {
+		// 90s stale: CF waitUntil can be cut off after relay finished; allow reclaim
+		if (Date.now() - started < 90_000) {
 			return { success: true, skipped: true, reason: "already_generating" as const };
 		}
+		console.warn("[generate] reclaiming stale generating job", generation.id, "ageMs", Date.now() - started);
 	}
 	// CAS claim: pending/failed always; generating only if we already decided it's stale above
 	const statusFilter =
@@ -1061,10 +1109,25 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 		}
 	};
 
-	// Prefer background execution on Cloudflare to avoid 30s request timeout
+	// Prefer background execution on Cloudflare to avoid 30s request timeout.
+	// IMPORTANT: when already invoked from an outer waitUntil (createMessage auto-start),
+	// we must AWAIT run() so the outer promise tracks full work. Nested waitUntil(run())
+	// + early return caused the worker to exit after claim while relay still ran → UI stuck.
 	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
+	const block = !!(ctx as any).blockGenerate;
+
+	if (block) {
+		await run();
+		return { success: true, async: false };
+	}
+
 	if (exec?.waitUntil) {
-		exec.waitUntil(run());
+		// HTTP path: respond immediately, keep worker alive for run()
+		exec.waitUntil(
+			run().catch((e) => {
+				console.error("[generate] waitUntil run failed", e);
+			}),
+		);
 		return { success: true, async: true };
 	}
 
@@ -1142,9 +1205,10 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
 	if (exec?.waitUntil) {
 		exec.waitUntil(
-			createMessageGenerate({ generationId: originalGeneration.id }, ctx).catch((e) =>
-				console.error("auto regenerate generate failed", e),
-			),
+			createMessageGenerate(
+				{ generationId: originalGeneration.id },
+				{ ...ctx, blockGenerate: true } as any,
+			).catch((e) => console.error("auto regenerate generate failed", e)),
 		);
 	}
 

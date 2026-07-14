@@ -246,6 +246,12 @@ export const getFileUrl = async (fileId: string, userId: string) => {
 		return await storageHandlers.base64.get(metadata.file, userId);
 	}
 
+	// Remote https URLs: return directly so <img> works without auth redirect issues
+	if (metadata.protocol === "http:" || metadata.protocol === "https:") {
+		return metadata.accessUrl;
+	}
+
+	// data: URIs are huge — still use preview stream endpoint
 	return `/api/files/preview/${metadata.file.id}`;
 };
 

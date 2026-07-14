@@ -36,4 +36,9 @@ export function getContext(): ServiceContext {
 export interface RequestContext {
 	userId: string;
 	executionCtx?: ExecutionContext;
+	/**
+	 * When true, createMessageGenerate awaits full image generation (for outer waitUntil).
+	 * When false/undefined, HTTP path uses waitUntil + early return to avoid 30s timeout.
+	 */
+	blockGenerate?: boolean;
 }

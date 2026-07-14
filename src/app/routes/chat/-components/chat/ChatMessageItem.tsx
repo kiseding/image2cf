@@ -139,6 +139,7 @@ export function ChatMessageItem({
 			// Mark this generation as being polled
 			pollingGenerationIdRef.current = generationId;
 
+			let reclaimTried = false;
 			const pollStatus = async () => {
 				try {
 					if (skipPoll.current) {
@@ -157,9 +158,10 @@ export function ChatMessageItem({
 								(status as any).progress ||
 								(status as any).parameters?.progress ||
 								undefined,
+							resultUrls: (status as any).resultUrls,
 						};
 						onMessageUpdate(message.id, {
-							generation: gen,
+							generation: gen as any,
 						});
 
 						// Stop polling if generation is complete or failed
@@ -169,6 +171,22 @@ export function ChatMessageItem({
 								intervalRef.current = null;
 								pollingGenerationIdRef.current = null;
 							}
+							return;
+						}
+
+						// Stale generating (worker waitUntil cut off) → reclaim once
+						if (
+							!reclaimTried &&
+							((status as any).stale ||
+								((status.status === "generating" || status.status === "pending") &&
+									typeof (status as any).ageMs === "number" &&
+									(status as any).ageMs > 90_000))
+						) {
+							reclaimTried = true;
+							console.warn("[poll] reclaiming stale generation", generationId);
+							chatService.createMessageGenerate({ generationId: generationId! }).catch((e) => {
+								console.error("reclaim generate failed", e);
+							});
 						}
 					}
 				} catch (error) {
