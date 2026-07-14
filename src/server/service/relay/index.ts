@@ -1,7 +1,9 @@
 import {
+	COMMON_IMAGE_MODELS,
 	guessImageModelMeta,
 	isLikelyImageModel,
 	normalizeRelayBaseURL,
+	type RelayProtocol,
 } from "@/server/ai/provider/relay-presets";
 import { userRelays } from "@/server/db/schemas";
 import { ServiceException } from "@/server/lib/exception";
@@ -182,6 +184,8 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 				message: json?.error?.message || json?.message || text.slice(0, 200) || `HTTP ${resp.status}`,
 				baseURL,
 				models: [] as RelayModel[],
+				totalFromApi: 0,
+				suggestedModels: COMMON_IMAGE_MODELS.openai,
 			};
 		}
 		const rawList: any[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
@@ -194,18 +198,19 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 				return { id, name, ...meta } as RelayModel;
 			})
 			.filter(Boolean) as RelayModel[];
-		// Prefer image models; if filter yields nothing but API returned models, keep all
-		const imageOnly = allMapped.filter((m) => isLikelyImageModel(m.id, m.name));
-		const models = imageOnly.length ? imageOnly : allMapped;
+		// NEVER dump chat LLMs into the image product — only keep image-like models
+		const models = allMapped.filter((m) => isLikelyImageModel(m.id, m.name));
 
 		return {
 			ok: true as const,
 			status: resp.status,
 			message: models.length
-				? `OK · ${models.length} models${imageOnly.length ? " (image)" : ""}`
-				: "OK · connected (empty model list; add Model IDs manually)",
+				? `OK · found ${models.length} image model(s) (of ${allMapped.length} total)`
+				: `OK · connected, but /models has ${allMapped.length} entries and none look like image models. Use “常用生图模型” or paste Model IDs from docs.`,
 			baseURL,
 			models,
+			totalFromApi: allMapped.length,
+			suggestedModels: COMMON_IMAGE_MODELS.openai,
 		};
 	}
 
@@ -248,16 +253,17 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 					return { id, name, ...meta } as RelayModel;
 				})
 				.filter(Boolean) as RelayModel[];
-			const imageOnly = allMapped.filter((m) => isLikelyImageModel(m.id, m.name));
-			const models = imageOnly.length ? imageOnly : allMapped;
+			const models = allMapped.filter((m) => isLikelyImageModel(m.id, m.name));
 			return {
 				ok: true as const,
 				status: resp.status,
 				message: models.length
-					? `OK · ${models.length} models${imageOnly.length ? " (image)" : ""}`
-					: "OK · connected (empty model list; add Model IDs manually)",
+					? `OK · found ${models.length} image model(s) (of ${allMapped.length} total)`
+					: `OK · connected, but no image models in list (${allMapped.length} total). Use common image models or paste IDs.`,
 				baseURL: root,
 				models,
+				totalFromApi: allMapped.length,
+				suggestedModels: COMMON_IMAGE_MODELS.google,
 			};
 		} catch (e: any) {
 			lastErr = e?.message || String(e);
@@ -269,7 +275,14 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 		message: lastErr,
 		baseURL: root,
 		models: [] as RelayModel[],
+		totalFromApi: 0,
+		suggestedModels: COMMON_IMAGE_MODELS.google,
 	};
+};
+
+/** Return built-in common image model IDs for a protocol (not tied to a vendor station) */
+const getCommonImageModels = async (req: { type: RelayProtocol }, _ctx: RequestContext) => {
+	return COMMON_IMAGE_MODELS[req.type] || [];
 };
 
 const deleteRelay = async (req: DeleteRelay, ctx: RequestContext) => {
@@ -350,6 +363,7 @@ class RelayService {
 	updateRelay = updateRelay;
 	deleteRelay = deleteRelay;
 	probeRelay = probeRelay;
+	getCommonImageModels = getCommonImageModels;
 	getEnabledRelaysAsProviders = getEnabledRelaysAsProviders;
 	resolveRelayForGeneration = resolveRelayForGeneration;
 }

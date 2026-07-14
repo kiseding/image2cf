@@ -9,9 +9,13 @@ import { Textarea } from "@/app/components/ui/textarea";
 import { useToast } from "@/app/hooks/useToast";
 import { useRelayService } from "@/app/hooks/useService";
 import { SettingsPageLayout } from "@/app/routes/settings/-components/SettingsPageLayout";
-import { RELAY_PROTOCOL_GUIDE, type RelayProtocol } from "@/server/ai/provider/relay-presets";
+import {
+	COMMON_IMAGE_MODELS,
+	RELAY_PROTOCOL_GUIDE,
+	type RelayProtocol,
+} from "@/server/ai/provider/relay-presets";
 import { createFileRoute } from "@tanstack/react-router";
-import { Loader2, LucideNetwork, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, LucideNetwork, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { mutate } from "swr";
@@ -170,6 +174,30 @@ function RelaySettingsPage() {
 		}));
 	};
 
+	const mergeModelsIntoForm = (incoming: RelayModelForm[], baseURL?: string) => {
+		const filled = form.models.filter((m) => m.id.trim() && m.name.trim());
+		const existing = new Map(filled.map((m) => [m.id, m]));
+		for (const m of incoming) {
+			if (!m.id?.trim()) continue;
+			existing.set(m.id, {
+				id: m.id,
+				name: m.name || m.id,
+				ability: m.ability || "t2i",
+				maxInputImages: m.maxInputImages || 1,
+			});
+		}
+		const next = Array.from(existing.values());
+		setForm((p) => ({
+			...p,
+			models: next.length ? next : p.models,
+			...(baseURL ? { baseURL } : {}),
+		}));
+		setTimeout(() => {
+			document.getElementById("relay-model-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+		}, 50);
+		return next.length;
+	};
+
 	const handleProbe = async (importModels: boolean) => {
 		if (!form.baseURL.trim() || !form.apiKey.trim()) {
 			toast({ title: t("common.error"), description: t("settings.relay.fillRequired"), variant: "destructive" });
@@ -191,36 +219,28 @@ function RelaySettingsPage() {
 				return;
 			}
 			if (importModels && result.models?.length) {
-				// Replace empty placeholders; merge with any already filled models
-				const filled = form.models.filter((m) => m.id.trim() && m.name.trim());
-				const existing = new Map(filled.map((m) => [m.id, m]));
-				for (const m of result.models) {
-					existing.set(m.id, {
+				const count = mergeModelsIntoForm(
+					result.models.map((m) => ({
 						id: m.id,
 						name: m.name || m.id,
 						ability: (m.ability as "t2i" | "i2i") || "t2i",
 						maxInputImages: m.maxInputImages || 1,
-					});
-				}
-				const next = Array.from(existing.values());
-				setForm((p) => ({
-					...p,
-					models: next,
-					baseURL: result.baseURL || p.baseURL,
-				}));
+					})),
+					result.baseURL,
+				);
 				toast({
 					title: t("settings.relay.probeOk"),
-					description: t("settings.relay.importedModels", { count: next.length }),
+					description: t("settings.relay.importedModels", { count }),
 				});
-				// scroll model list into view after paint
-				setTimeout(() => {
-					document.getElementById("relay-model-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
-				}, 50);
 			} else if (importModels && !result.models?.length) {
+				// Typical for Chinese relays: /models only lists chat models
 				toast({
 					title: t("settings.relay.probeOk"),
-					description: t("settings.relay.noImageModels"),
+					description: t("settings.relay.noImageModelsHint", {
+						total: (result as any).totalFromApi ?? 0,
+					}),
 				});
+				if (result.baseURL) setForm((p) => ({ ...p, baseURL: result.baseURL }));
 			} else {
 				if (result.baseURL) setForm((p) => ({ ...p, baseURL: result.baseURL }));
 				toast({ title: t("settings.relay.probeOk"), description: result.message });
@@ -230,6 +250,22 @@ function RelaySettingsPage() {
 		} finally {
 			setProbing(false);
 		}
+	};
+
+	const addCommonImageModels = () => {
+		const list = COMMON_IMAGE_MODELS[form.type] || [];
+		const count = mergeModelsIntoForm(
+			list.map((m) => ({
+				id: m.id,
+				name: m.name,
+				ability: (m.ability as "t2i" | "i2i") || "t2i",
+				maxInputImages: m.maxInputImages || 1,
+			})),
+		);
+		toast({
+			title: t("common.success"),
+			description: t("settings.relay.addedCommonModels", { count }),
+		});
 	};
 
 	const applyBulkModels = () => {
@@ -422,10 +458,15 @@ function RelaySettingsPage() {
 								{probing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
 								{t("settings.relay.fetchModels")}
 							</Button>
+							<Button type="button" variant="secondary" size="sm" onClick={addCommonImageModels}>
+								<Sparkles className="mr-1 h-3 w-3" />
+								{t("settings.relay.addCommonImageModels")}
+							</Button>
 							<Button type="button" variant="ghost" size="sm" onClick={() => setShowBulk((v) => !v)}>
 								{t("settings.relay.bulkImport")}
 							</Button>
 						</div>
+						<p className="text-muted-foreground text-[11px]">{t("settings.relay.fetchModelsNote")}</p>
 
 						{showBulk && (
 							<div className="space-y-2 rounded-lg border p-3">

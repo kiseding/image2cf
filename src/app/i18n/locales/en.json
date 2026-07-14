@@ -177,10 +177,14 @@
 			"apiModeImages": "Images API · /v1/images/*",
 			"apiModeResponses": "Responses API · /v1/responses",
 			"apiModeHint": "Some relays need Responses for gpt-image; classic DALL·E uses Images. Auto picks and falls back.",
-			"modelsEmpty": "No models yet. Fetch image models or add Model IDs manually.",
+			"modelsEmpty": "No image models yet. Add common ones or paste Model IDs from your relay docs.",
 			"clearModels": "Clear",
 			"clearModelsConfirm": "Clear the model list?",
-			"noImageModels": "Connected, but no image models detected. Add Model IDs manually."
+			"noImageModels": "Connected, but no image models found. Use “Add common image models”.",
+			"addCommonImageModels": "Add common image models",
+			"addedCommonModels": "Added {{count}} common image models (edit as needed for your relay)",
+			"fetchModelsNote": "Note: many relays only list chat models on /models. Use “Add common image models” or paste Model IDs from docs.",
+			"noImageModelsHint": "Connected. API returned {{total}} models, none look like image models. Use common image models or paste IDs."
 		},
 		"users": {
 			"title": "User Management",

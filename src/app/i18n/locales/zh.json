@@ -177,10 +177,14 @@
 			"apiModeImages": "Images API · /v1/images/*",
 			"apiModeResponses": "Responses API · /v1/responses",
 			"apiModeHint": "部分中转（如 gpt-image）需用 Responses；经典 DALL·E 用 Images。自动会按模型选择并失败时回退。",
-			"modelsEmpty": "还没有模型。点「拉取生图模型」或手动添加 Model ID。",
+			"modelsEmpty": "还没有生图模型。点「添加常用生图模型」或按中转文档填写 Model ID。",
 			"clearModels": "清空",
 			"clearModelsConfirm": "清空当前模型列表？",
-			"noImageModels": "连接成功，但未识别出生图模型，请手动填写 Model ID。"
+			"noImageModels": "连接成功，但未识别出生图模型。请点「添加常用生图模型」。",
+			"addCommonImageModels": "添加常用生图模型",
+			"addedCommonModels": "已添加 {{count}} 个常用生图模型（可删改，以中转站实际可用为准）",
+			"fetchModelsNote": "说明：多数中转 /models 只返回文本模型，不会列出 gpt-image / flux 等。请点「添加常用生图模型」或按文档手填 Model ID。",
+			"noImageModelsHint": "连接成功，接口返回 {{total}} 个模型，但都不是生图模型。请点「添加常用生图模型」或手动填写。"
 		},
 		"users": {
 			"title": "用户管理",
