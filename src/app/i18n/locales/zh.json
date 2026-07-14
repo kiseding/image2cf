@@ -176,7 +176,11 @@
 			"apiModeAuto": "自动（推荐）",
 			"apiModeImages": "Images API · /v1/images/*",
 			"apiModeResponses": "Responses API · /v1/responses",
-			"apiModeHint": "部分中转（如 gpt-image）需用 Responses；经典 DALL·E 用 Images。自动会按模型选择并失败时回退。"
+			"apiModeHint": "部分中转（如 gpt-image）需用 Responses；经典 DALL·E 用 Images。自动会按模型选择并失败时回退。",
+			"modelsEmpty": "还没有模型。点「拉取生图模型」或手动添加 Model ID。",
+			"clearModels": "清空",
+			"clearModelsConfirm": "清空当前模型列表？",
+			"noImageModels": "连接成功，但未识别出生图模型，请手动填写 Model ID。"
 		},
 		"users": {
 			"title": "用户管理",

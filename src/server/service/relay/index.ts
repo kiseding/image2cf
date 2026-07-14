@@ -185,24 +185,25 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 			};
 		}
 		const rawList: any[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
-		const models: RelayModel[] = rawList
+		const allMapped: RelayModel[] = rawList
 			.map((m) => {
 				const id = String(m.id || m.name || "").trim();
 				if (!id) return null;
-				const name = String(m.id || m.name || id);
-				// Image product: only keep image-generation models when auto-fetching
-				if (!isLikelyImageModel(id, name)) return null;
+				const name = String(m.name || m.id || id);
 				const meta = guessImageModelMeta(id, name);
 				return { id, name, ...meta } as RelayModel;
 			})
 			.filter(Boolean) as RelayModel[];
+		// Prefer image models; if filter yields nothing but API returned models, keep all
+		const imageOnly = allMapped.filter((m) => isLikelyImageModel(m.id, m.name));
+		const models = imageOnly.length ? imageOnly : allMapped;
 
 		return {
 			ok: true as const,
 			status: resp.status,
 			message: models.length
-				? `OK · ${models.length} image models`
-				: "OK · connected (no image models auto-detected; add Model IDs manually)",
+				? `OK · ${models.length} models${imageOnly.length ? " (image)" : ""}`
+				: "OK · connected (empty model list; add Model IDs manually)",
 			baseURL,
 			models,
 		};
@@ -237,23 +238,24 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 				continue;
 			}
 			const rawList: any[] = Array.isArray(json?.models) ? json.models : [];
-			const models: RelayModel[] = rawList
+			const allMapped: RelayModel[] = rawList
 				.map((m) => {
 					const full = String(m.name || m.id || "");
 					const id = full.replace(/^models\//, "").trim();
 					if (!id) return null;
 					const name = id;
-					if (!isLikelyImageModel(id, name)) return null;
 					const meta = guessImageModelMeta(id, name);
 					return { id, name, ...meta } as RelayModel;
 				})
 				.filter(Boolean) as RelayModel[];
+			const imageOnly = allMapped.filter((m) => isLikelyImageModel(m.id, m.name));
+			const models = imageOnly.length ? imageOnly : allMapped;
 			return {
 				ok: true as const,
 				status: resp.status,
 				message: models.length
-					? `OK · ${models.length} image models`
-					: "OK · connected (no image models auto-detected; add Model IDs manually)",
+					? `OK · ${models.length} models${imageOnly.length ? " (image)" : ""}`
+					: "OK · connected (empty model list; add Model IDs manually)",
 				baseURL: root,
 				models,
 			};

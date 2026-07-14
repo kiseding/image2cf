@@ -176,7 +176,11 @@
 			"apiModeAuto": "Auto (recommended)",
 			"apiModeImages": "Images API · /v1/images/*",
 			"apiModeResponses": "Responses API · /v1/responses",
-			"apiModeHint": "Some relays need Responses for gpt-image; classic DALL·E uses Images. Auto picks and falls back."
+			"apiModeHint": "Some relays need Responses for gpt-image; classic DALL·E uses Images. Auto picks and falls back.",
+			"modelsEmpty": "No models yet. Fetch image models or add Model IDs manually.",
+			"clearModels": "Clear",
+			"clearModelsConfirm": "Clear the model list?",
+			"noImageModels": "Connected, but no image models detected. Add Model IDs manually."
 		},
 		"users": {
 			"title": "User Management",

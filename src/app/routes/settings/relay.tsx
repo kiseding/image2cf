@@ -191,25 +191,35 @@ function RelaySettingsPage() {
 				return;
 			}
 			if (importModels && result.models?.length) {
-				const existing = new Map(form.models.filter((m) => m.id).map((m) => [m.id, m]));
+				// Replace empty placeholders; merge with any already filled models
+				const filled = form.models.filter((m) => m.id.trim() && m.name.trim());
+				const existing = new Map(filled.map((m) => [m.id, m]));
 				for (const m of result.models) {
-					if (!existing.has(m.id)) {
-						existing.set(m.id, {
-							id: m.id,
-							name: m.name,
-							ability: (m.ability as "t2i" | "i2i") || "t2i",
-							maxInputImages: m.maxInputImages || 1,
-						});
-					}
+					existing.set(m.id, {
+						id: m.id,
+						name: m.name || m.id,
+						ability: (m.ability as "t2i" | "i2i") || "t2i",
+						maxInputImages: m.maxInputImages || 1,
+					});
 				}
+				const next = Array.from(existing.values());
 				setForm((p) => ({
 					...p,
-					models: Array.from(existing.values()),
+					models: next,
 					baseURL: result.baseURL || p.baseURL,
 				}));
 				toast({
 					title: t("settings.relay.probeOk"),
-					description: t("settings.relay.importedModels", { count: result.models.length }),
+					description: t("settings.relay.importedModels", { count: next.length }),
+				});
+				// scroll model list into view after paint
+				setTimeout(() => {
+					document.getElementById("relay-model-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+				}, 50);
+			} else if (importModels && !result.models?.length) {
+				toast({
+					title: t("settings.relay.probeOk"),
+					description: t("settings.relay.noImageModels"),
 				});
 			} else {
 				if (result.baseURL) setForm((p) => ({ ...p, baseURL: result.baseURL }));
@@ -299,6 +309,20 @@ function RelaySettingsPage() {
 										{relay.type === "openai" ? ` · ${relay.apiMode || "auto"}` : ""} · API Key:{" "}
 										{relay.apiKey}
 									</p>
+									{!!relay.models?.length && (
+										<div className="flex flex-wrap gap-1 pt-1">
+											{(relay.models as RelayModelForm[]).slice(0, 12).map((m) => (
+												<Badge key={m.id} variant="outline" className="max-w-[140px] truncate font-normal text-[10px]">
+													{m.name || m.id}
+												</Badge>
+											))}
+											{(relay.models?.length || 0) > 12 && (
+												<Badge variant="outline" className="text-[10px]">
+													+{(relay.models?.length || 0) - 12}
+												</Badge>
+											)}
+										</div>
+									)}
 								</div>
 								<div className="flex items-center gap-2">
 									<Switch checked={relay.enabled} onCheckedChange={(v) => handleToggle(relay.id, v)} />
@@ -424,90 +448,145 @@ function RelaySettingsPage() {
 							<Switch checked={form.enabled} onCheckedChange={(v) => setForm((p) => ({ ...p, enabled: v }))} />
 						</div>
 
-						<div className="space-y-2">
+						<div id="relay-model-list" className="space-y-2">
 							<div className="flex items-center justify-between">
-								<Label>{t("settings.relay.models")}</Label>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onClick={() =>
-										setForm((p) => ({
-											...p,
-											models: [...p.models, { id: "", name: "", ability: "i2i", maxInputImages: 1 }],
-										}))
-									}
-								>
-									<Plus className="mr-1 h-3 w-3" />
-									{t("settings.relay.addModel")}
-								</Button>
-							</div>
-							{form.models.map((model, index) => (
-								<div key={index} className="space-y-2 rounded-lg border p-3">
-									<div className="grid grid-cols-2 gap-2">
-										<div className="space-y-1">
-											<Label className="text-xs">Model ID</Label>
-											<Input
-												value={model.id}
-												onChange={(e) => updateModel(index, { id: e.target.value })}
-												placeholder="gpt-image-1"
-											/>
-										</div>
-										<div className="space-y-1">
-											<Label className="text-xs">{t("settings.relay.modelName")}</Label>
-											<Input
-												value={model.name}
-												onChange={(e) => updateModel(index, { name: e.target.value })}
-												placeholder="GPT Image 1"
-											/>
-										</div>
-									</div>
-									<div className="grid grid-cols-2 gap-2">
-										<div className="space-y-1">
-											<Label className="text-xs">{t("settings.relay.ability")}</Label>
-											<Select
-												value={model.ability}
-												onValueChange={(v) => updateModel(index, { ability: v as "t2i" | "i2i" })}
-											>
-												<SelectTrigger>
-													<SelectValue />
-												</SelectTrigger>
-												<SelectContent>
-													<SelectItem value="t2i">T2I · 文生图</SelectItem>
-													<SelectItem value="i2i">I2I · 图生图</SelectItem>
-												</SelectContent>
-											</Select>
-										</div>
-										<div className="space-y-1">
-											<Label className="text-xs">{t("settings.relay.maxImages")}</Label>
-											<Input
-												type="number"
-												min={1}
-												max={10}
-												value={model.maxInputImages}
-												onChange={(e) => updateModel(index, { maxInputImages: Number(e.target.value) || 1 })}
-											/>
-										</div>
-									</div>
-									{form.models.length > 1 && (
+								<div className="flex items-center gap-2">
+									<Label>{t("settings.relay.models")}</Label>
+									<Badge variant="secondary" className="text-[10px]">
+										{form.models.filter((m) => m.id.trim()).length}
+									</Badge>
+								</div>
+								<div className="flex gap-1">
+									{form.models.some((m) => m.id.trim()) && (
 										<Button
 											type="button"
 											variant="ghost"
 											size="sm"
 											className="text-destructive"
-											onClick={() =>
-												setForm((p) => ({
-													...p,
-													models: p.models.filter((_, i) => i !== index),
-												}))
-											}
+											onClick={() => {
+												if (confirm(t("settings.relay.clearModelsConfirm"))) {
+													setForm((p) => ({
+														...p,
+														models: [{ id: "", name: "", ability: "i2i", maxInputImages: 1 }],
+													}));
+												}
+											}}
 										>
-											<Trash2 className="mr-1 h-3 w-3" />
-											{t("common.delete")}
+											{t("settings.relay.clearModels")}
 										</Button>
 									)}
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										onClick={() =>
+											setForm((p) => ({
+												...p,
+												models: [...p.models, { id: "", name: "", ability: "i2i", maxInputImages: 1 }],
+											}))
+										}
+									>
+										<Plus className="mr-1 h-3 w-3" />
+										{t("settings.relay.addModel")}
+									</Button>
 								</div>
-							))}
+							</div>
+
+							{/* Compact summary chips when many models */}
+							{form.models.filter((m) => m.id.trim()).length > 0 && (
+								<div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto rounded-md border bg-muted/30 p-2">
+									{form.models
+										.filter((m) => m.id.trim())
+										.map((m) => (
+											<Badge
+												key={m.id}
+												variant="outline"
+												className="max-w-[160px] truncate font-normal text-[10px]"
+												title={`${m.id} (${m.ability})`}
+											>
+												{m.name || m.id}
+												<span className="ml-1 opacity-60">{m.ability}</span>
+											</Badge>
+										))}
+								</div>
+							)}
+
+							{form.models.filter((m) => m.id.trim()).length === 0 && (
+								<p className="rounded-md border border-dashed p-3 text-center text-muted-foreground text-xs">
+									{t("settings.relay.modelsEmpty")}
+								</p>
+							)}
+
+							<div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+								{form.models.map((model, index) => (
+									<div key={`${model.id}-${index}`} className="space-y-2 rounded-lg border bg-card p-3">
+										<div className="grid grid-cols-2 gap-2">
+											<div className="space-y-1">
+												<Label className="text-xs">Model ID</Label>
+												<Input
+													value={model.id}
+													onChange={(e) => updateModel(index, { id: e.target.value })}
+													placeholder="gpt-image-1"
+												/>
+											</div>
+											<div className="space-y-1">
+												<Label className="text-xs">{t("settings.relay.modelName")}</Label>
+												<Input
+													value={model.name}
+													onChange={(e) => updateModel(index, { name: e.target.value })}
+													placeholder="GPT Image 1"
+												/>
+											</div>
+										</div>
+										<div className="grid grid-cols-2 gap-2">
+											<div className="space-y-1">
+												<Label className="text-xs">{t("settings.relay.ability")}</Label>
+												<Select
+													value={model.ability}
+													onValueChange={(v) => updateModel(index, { ability: v as "t2i" | "i2i" })}
+												>
+													<SelectTrigger>
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														<SelectItem value="t2i">T2I · 文生图</SelectItem>
+														<SelectItem value="i2i">I2I · 图生图</SelectItem>
+													</SelectContent>
+												</Select>
+											</div>
+											<div className="space-y-1">
+												<Label className="text-xs">{t("settings.relay.maxImages")}</Label>
+												<Input
+													type="number"
+													min={1}
+													max={10}
+													value={model.maxInputImages}
+													onChange={(e) =>
+														updateModel(index, { maxInputImages: Number(e.target.value) || 1 })
+													}
+												/>
+											</div>
+										</div>
+										{form.models.length > 1 && (
+											<Button
+												type="button"
+												variant="ghost"
+												size="sm"
+												className="text-destructive"
+												onClick={() =>
+													setForm((p) => ({
+														...p,
+														models: p.models.filter((_, i) => i !== index),
+													}))
+												}
+											>
+												<Trash2 className="mr-1 h-3 w-3" />
+												{t("common.delete")}
+											</Button>
+										)}
+									</div>
+								))}
+							</div>
 						</div>
 					</div>
 					<DialogFooter>
