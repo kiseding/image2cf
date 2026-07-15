@@ -39,7 +39,7 @@
 		"chatWith": "开始创作",
 		"imageGenerated": "图片生成成功",
 		"thinking": "AI思考中...",
-		"generating": "生成图片中…",
+		"generating": "正在生成图片…",
 		"selectModel": "选择模型",
 		"welcomeMessage": "描述您想要创建的图片！让您的想象力尽情发挥。",
 		"generatedImage": "生成的图片",
@@ -88,12 +88,12 @@
 		"modelLoadFailed": "模型加载失败，点击重试",
 		"configureRelay": "请先配置中转站/模型",
 		"progress": {
-			"queued": "已提交，排队中",
-			"preparing": "准备请求…",
-			"calling": "正在调用生图接口…",
-			"parsing": "解析返回结果…",
-			"saving": "保存图片…",
-			"hint": "消息已发送成功。多数生图接口不支持像素级流式进度，这里显示的是服务端阶段进度。"
+			"queued": "正在生成图片…",
+			"preparing": "正在准备…",
+			"calling": "正在生成图片…",
+			"parsing": "正在处理结果…",
+			"saving": "正在保存图片…",
+			"hint": "消息已发送，请稍候。"
 		}
 	},
 	"navigation": {

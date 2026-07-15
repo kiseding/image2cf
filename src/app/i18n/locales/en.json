@@ -88,12 +88,12 @@
 		"modelLoadFailed": "Failed to load models, tap to retry",
 		"configureRelay": "Configure a relay / model first",
 		"progress": {
-			"queued": "Submitted, queued",
-			"preparing": "Preparing request…",
-			"calling": "Calling image API…",
-			"parsing": "Parsing response…",
-			"saving": "Saving images…",
-			"hint": "Message sent. Most image APIs are not pixel-streamable; this shows server-side stage progress."
+			"queued": "Generating image…",
+			"preparing": "preparing…",
+			"calling": "generating image…",
+			"parsing": "processing result…",
+			"saving": "saving image…",
+			"hint": "Message sent, please wait."
 		}
 	},
 	"navigation": {

@@ -176,7 +176,7 @@ export function ChatMessageItem({
 				}
 			};
 
-			// Poll sooner so users see "queued → calling" progress quickly
+			// Poll generation status while generating
 			const timeoutId = setTimeout(() => {
 				if (isMessageGenerating && pollingGenerationIdRef.current === generationId) {
 					pollStatus();
@@ -349,7 +349,7 @@ export function ChatMessageItem({
 									const progress = (message.generation as any)?.progress as
 										| { phase?: string; percent?: number; message?: string; startedAt?: string }
 										| undefined;
-									const phase = progress?.phase || (message.generation?.status === "pending" ? "queued" : "calling_api");
+									const phase = progress?.phase || "calling_api";
 									const serverPct = typeof progress?.percent === "number" ? progress.percent : 30;
 									const startedMs = progress?.startedAt
 										? Date.parse(progress.startedAt)
@@ -360,17 +360,15 @@ export function ChatMessageItem({
 									const phaseLabel = (() => {
 										switch (phase) {
 											case "queued":
-												return t("chat.progress.queued", "已提交，排队中");
 											case "preparing":
-												return t("chat.progress.preparing", "准备请求…");
 											case "calling_api":
-												return t("chat.progress.calling", "正在调用生图接口…");
+												return t("chat.progress.calling", "正在生成图片…");
 											case "parsing":
-												return t("chat.progress.parsing", "解析返回结果…");
+												return t("chat.progress.parsing", "正在处理结果…");
 											case "saving":
-												return t("chat.progress.saving", "保存图片…");
+												return t("chat.progress.saving", "正在保存图片…");
 											default:
-												return t("chat.generating");
+												return t("chat.generating", "正在生成图片…");
 										}
 									})();
 									return (
@@ -395,10 +393,7 @@ export function ChatMessageItem({
 												/>
 											</div>
 											<p className="text-muted-foreground text-[11px] leading-relaxed">
-												{t(
-													"chat.progress.hint",
-													"消息已发送，正在等待中转返回（通常 10 秒～3 分钟）。",
-												)}
+												{t("chat.progress.hint", "消息已发送，请稍候。")}
 											</p>
 											<div className="space-y-2">
 												<Skeleton className="h-24 w-full rounded-lg" />
