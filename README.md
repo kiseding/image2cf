@@ -33,7 +33,7 @@
 - **后端**：Hono（Cloudflare Workers）  
 - **鉴权**：better-auth + 用户名登录 `/api/login`  
 - **数据**：Drizzle ORM · **D1**（会话/用户）· **R2**（图片）  
-- **部署**：GitHub Actions → `wrangler deploy --keep-vars`
+- **部署**：GitHub Actions → Cloudflare Queues + `wrangler deploy --keep-vars`
 
 ---
 
@@ -56,8 +56,8 @@
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | Account ID |
 | `CLOUDFLARE_D1_DATABASE_ID` | ✅ | D1 UUID |
 | `ADMIN_PASSWORD` | ✅ | 管理员 `admin` 密码（部署时写入 Worker Secret） |
-| `WORKER_URL` | 建议 | 如 `https://image.kiseding.top`，用于部署后 bootstrap |
 | `CLOUDFLARE_R2_BUCKET_NAME` | 可选 | 默认 `image2cf` |
+| `CREDENTIALS_SECRET` | 建议 | 凭据加密密钥；不设时回退 `ADMIN_PASSWORD`，设置后不要更换 |
 
 **不要**把真实 D1 ID / 密钥写进仓库里的 `wrangler.toml`。
 
@@ -65,7 +65,7 @@
 
 - push 到 `main`，或 Actions → **Deploy Cloudflare Workers** → Run workflow  
 
-流程：安装依赖 → 注入 D1/R2 → 构建 → D1 迁移 → 部署 → 同步 `ADMIN_PASSWORD` → bootstrap。
+流程：安装依赖 → 创建 R2/Queues → 构建 → D1 迁移 → 部署 → 同步管理员和凭据加密 Secret。管理员仅在不存在时自动创建，不会覆盖已有密码。
 
 ### 4. 登录
 
@@ -73,7 +73,7 @@
 2. 用户名：`admin`  
 3. 密码：GitHub Secret `ADMIN_PASSWORD`  
 
-诊断：
+以下 setup 接口首次安装时可用；已有用户后仅管理员可访问：
 
 ```text
 GET  /api/setup/status
@@ -94,13 +94,16 @@ POST /api/setup/bootstrap
 | `DEBUG` | 关 | 设为 `true` 开启 `/api/debug/*` |
 | `PROVIDER_CLOUDFLARE_BUILTIN` | `true` | 是否启用内置 Workers AI |
 | `BETTER_AUTH_SECRET` | 可选 | 会话签名；不设则回落 `ADMIN_PASSWORD` |
+| `CREDENTIALS_SECRET` | 建议 | AES-GCM 加密中转/Provider Key；不设则回退其他服务端 Secret |
 
 绑定（`wrangler.toml`）：
 
 - `DB` → D1  
 - `R2` → R2 bucket  
 - `AI` → Workers AI（可选）  
+- `GENERATION_QUEUE` → Cloudflare Queue（持久执行生图任务）
 - Cron：`0 3 * * *` 清理过期 R2 对象  
+- Cron：每 5 分钟回收超过 15 分钟仍未结束的生成任务
 
 ---
 
@@ -147,7 +150,7 @@ POST /api/setup/bootstrap
 
 `排队 → 准备 → 调用接口 → 解析 → 保存 → 完成`
 
-上游硬超时约 **2.5 分钟**；超时会标记 `TIMEOUT`，避免一直「生成中」。
+生成请求通过 Cloudflare Queue 持久执行，HTTP 请求只负责原子抢占并入队。同一任务通过 attempt 版本防止并发重复计费和旧结果覆盖；超过 **15 分钟**仍未完成的任务由定时任务标记为 `TIMEOUT`。
 
 ---
 
@@ -237,7 +240,7 @@ image2cf/
 
 | 现象 | 处理 |
 |------|------|
-| 无法登录 | `ADMIN_PASSWORD` 是否同步；`GET /api/setup/status`；`POST /api/setup/bootstrap` |
+| 无法登录 | 检查 `ADMIN_PASSWORD`；管理员登录后查看 setup 状态；初始化不会覆盖已有密码 |
 | Actions 失败 | 检查 Token / Account ID / D1 ID；Token 是否含 R2 |
 | 中转失败 | Base URL、Key、三路径、模型 ID；勿把文本模型当生图模型 |
 | 一直「生成中」 | 部署最新代码；`DEBUG=true` 看 generations；`fail-stale` 清理僵尸任务；看中转是否真返回 url/b64 |
@@ -256,9 +259,10 @@ image2cf/
 
 ## 安全注意
 
-- 中转 **API Key** 存 D1，列表/详情对前端脱敏  
-- 中转 Base URL 禁止内网 / metadata（SSRF 防护）  
-- 登录与生图有简易限流  
+- 中转和 Provider **API Key** 使用 AES-GCM 加密后存 D1，列表/详情不向前端返回明文
+- 中转 Base URL 仅允许 HTTPS，禁止字面私网/metadata，逐跳检查重定向并限制响应大小与时间
+- 登录、消息和生图使用 D1 原子限流，多 Worker isolate 共享
+- 上传最多 8 张图，单张 10 MiB、总计 20 MiB；远程图片限制 10 MiB，并校验图片魔数
 - `DEBUG` 勿长期开在公网  
 
 ---

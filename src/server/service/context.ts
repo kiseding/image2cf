@@ -15,6 +15,14 @@ interface ServiceContext {
 	/** DEBUG=true */
 	debug?: boolean;
 	fileStorage?: string;
+	credentialsSecret?: string;
+	generationQueue?: Queue<GenerationQueueMessage>;
+}
+
+export interface GenerationQueueMessage {
+	generationId: string;
+	userId: string;
+	attempt: number;
 }
 
 let serviceContext: ServiceContext | null = null;

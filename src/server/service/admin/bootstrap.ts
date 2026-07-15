@@ -6,10 +6,6 @@ import { nanoid } from "nanoid";
 const ADMIN_USERNAME = "admin";
 let done = false;
 
-export function resetBootstrapFlag() {
-	done = false;
-}
-
 function pickPassword(env: Record<string, any>): string | undefined {
 	// Direct property access — secrets may be non-enumerable (spread loses them)
 	const v = env.ADMIN_PASSWORD ?? env.admin_password ?? env.raw?.ADMIN_PASSWORD;
@@ -59,7 +55,6 @@ export async function bootstrapAdmin(_drizzle: DrizzleDb, env: Record<string, an
 		await ensureColumns(d1);
 		const email = usernameToEmail(ADMIN_USERNAME);
 		const name = String(env.ADMIN_NAME || "Admin");
-		const passwordHash = await hashPassword(password);
 		const now = Date.now();
 
 		// Match any known admin row (including legacy invalid synthetic emails)
@@ -75,50 +70,30 @@ export async function bootstrapAdmin(_drizzle: DrizzleDb, env: Record<string, an
 			.first<{ id: string; email: string }>();
 
 		let userId = existing?.id;
-		if (!userId) {
-			userId = nanoid();
-			await d1
-				.prepare(
-					`INSERT INTO user (id, name, email, email_verified, image, username, display_username, role, banned, created_at, updated_at)
+		if (userId) {
+			console.log(`[image2cf] admin already exists id=${userId}; bootstrap skipped`);
+			done = true;
+			return;
+		}
+
+		userId = nanoid();
+		const passwordHash = await hashPassword(password);
+		await d1
+			.prepare(
+				`INSERT INTO user (id, name, email, email_verified, image, username, display_username, role, banned, created_at, updated_at)
            VALUES (?, ?, ?, 1, NULL, ?, ?, 'admin', 0, ?, ?)`,
-				)
-				.bind(userId, name, email, ADMIN_USERNAME, name, now, now)
-				.run();
-			console.log(`[image2cf] inserted admin user id=${userId} email=${email}`);
-		} else {
-			// Always rewrite email to the current valid synthetic address
-			await d1
-				.prepare(
-					`UPDATE user SET name = ?, email = ?, email_verified = 1, username = ?, display_username = ?, role = 'admin', banned = 0, updated_at = ?
-           WHERE id = ?`,
-				)
-				.bind(name, email, ADMIN_USERNAME, name, now, userId)
-				.run();
-			console.log(
-				`[image2cf] updated admin user id=${userId} email=${email} (was ${existing?.email || "?"})`,
-			);
-		}
+			)
+			.bind(userId, name, email, ADMIN_USERNAME, name, now, now)
+			.run();
+		console.log(`[image2cf] inserted admin user id=${userId} email=${email}`);
 
-		// credential account
-		const acc = await d1
-			.prepare(`SELECT id FROM account WHERE user_id = ? AND provider_id = 'credential' LIMIT 1`)
-			.bind(userId)
-			.first<{ id: string }>();
-
-		if (acc?.id) {
-			await d1
-				.prepare(`UPDATE account SET password = ?, updated_at = ? WHERE id = ?`)
-				.bind(passwordHash, now, acc.id)
-				.run();
-		} else {
-			await d1
-				.prepare(
-					`INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at)
+		await d1
+			.prepare(
+				`INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at)
            VALUES (?, ?, 'credential', ?, ?, ?, ?)`,
-				)
-				.bind(nanoid(), userId, userId, passwordHash, now, now)
-				.run();
-		}
+			)
+			.bind(nanoid(), userId, userId, passwordHash, now, now)
+			.run();
 
 		// verify
 		const check = await d1
@@ -155,62 +130,40 @@ async function ensureColumns(d1: D1Database) {
 
 async function drizzleBootstrap(db: DrizzleDb, password: string) {
 	const { account, user } = await import("@/server/db/schemas");
-	const { eq } = await import("drizzle-orm");
+	const { eq, or } = await import("drizzle-orm");
 	const email = usernameToEmail(ADMIN_USERNAME);
-	const passwordHash = await hashPassword(password);
 	const now = new Date();
 
-	let admin = await db.query.user.findFirst({ where: eq(user.email, email) });
-	if (!admin) {
-		const id = nanoid();
-		await db.insert(user).values({
-			id,
-			name: "Admin",
-			email,
-			emailVerified: true,
-			username: ADMIN_USERNAME,
-			displayUsername: "Admin",
-			role: "admin",
-			banned: false,
-			createdAt: now,
-			updatedAt: now,
-		});
-		await db.insert(account).values({
-			id: nanoid(),
-			accountId: id,
-			providerId: "credential",
-			userId: id,
-			password: passwordHash,
-			createdAt: now,
-			updatedAt: now,
-		});
-		console.log("[image2cf] drizzle created admin");
+	const admin = await db.query.user.findFirst({
+		where: or(eq(user.email, email), eq(user.username, ADMIN_USERNAME), eq(user.role, "admin")),
+	});
+	if (admin) {
+		console.log("[image2cf] drizzle admin already exists; bootstrap skipped");
 		return;
 	}
-	await db
-		.update(user)
-		.set({
-			username: ADMIN_USERNAME,
-			email,
-			role: "admin",
-			banned: false,
-			emailVerified: true,
-			updatedAt: now,
-		})
-		.where(eq(user.id, admin.id));
-	const acc = await db.query.account.findFirst({ where: eq(account.userId, admin.id) });
-	if (acc) {
-		await db.update(account).set({ password: passwordHash, updatedAt: now }).where(eq(account.id, acc.id));
-	} else {
-		await db.insert(account).values({
-			id: nanoid(),
-			accountId: admin.id,
-			providerId: "credential",
-			userId: admin.id,
-			password: passwordHash,
-			createdAt: now,
-			updatedAt: now,
-		});
-	}
-	console.log("[image2cf] drizzle repaired admin");
+
+	const id = nanoid();
+	const passwordHash = await hashPassword(password);
+	await db.insert(user).values({
+		id,
+		name: "Admin",
+		email,
+		emailVerified: true,
+		username: ADMIN_USERNAME,
+		displayUsername: "Admin",
+		role: "admin",
+		banned: false,
+		createdAt: now,
+		updatedAt: now,
+	});
+	await db.insert(account).values({
+		id: nanoid(),
+		accountId: id,
+		providerId: "credential",
+		userId: id,
+		password: passwordHash,
+		createdAt: now,
+		updatedAt: now,
+	});
+	console.log("[image2cf] drizzle created admin");
 }

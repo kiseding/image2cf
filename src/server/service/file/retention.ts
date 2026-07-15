@@ -23,11 +23,10 @@ export async function purgeExpiredR2Objects(params: {
 	R2: R2Bucket;
 	db?: DrizzleDb;
 	retentionDays?: number;
-	/** Max objects to scan per run (pagination) */
+	/** Deprecated: every run now scans all pages so a volatile cursor cannot starve later objects. */
 	maxScan?: number;
 }): Promise<{ scanned: number; deleted: number; retentionDays: number; cutoffIso: string }> {
 	const retentionDays = params.retentionDays ?? DEFAULT_R2_RETENTION_DAYS;
-	const maxScan = params.maxScan ?? 1000;
 	const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
 	const cutoffIso = new Date(cutoff).toISOString();
 
@@ -36,12 +35,16 @@ export async function purgeExpiredR2Objects(params: {
 	let cursor: string | undefined;
 	let truncated = true;
 
-	while (truncated && scanned < maxScan) {
+	while (truncated) {
 		const listed = await params.R2.list({
 			prefix: "users/",
-			limit: Math.min(100, maxScan - scanned),
+			limit: 1000,
 			...(cursor ? { cursor } : {}),
 		});
+
+		truncated = !!listed.truncated;
+		cursor = truncated && "cursor" in listed ? (listed as { cursor?: string }).cursor : undefined;
+		if (truncated && !cursor) throw new Error("R2 returned a truncated page without a cursor");
 
 		for (const obj of listed.objects) {
 			scanned++;
@@ -54,10 +57,6 @@ export async function purgeExpiredR2Objects(params: {
 				deleted++;
 			}
 		}
-
-		truncated = !!listed.truncated;
-		cursor = truncated && "cursor" in listed ? (listed as { cursor?: string }).cursor : undefined;
-		if (!cursor) break;
 	}
 
 	// Optional: mark D1 rows that no longer have objects (does not delete rows)

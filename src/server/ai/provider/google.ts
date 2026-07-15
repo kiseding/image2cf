@@ -1,3 +1,4 @@
+import { assertSafePublicUrl } from "@/server/lib/ssrf";
 import { GoogleGenAI } from "@google/genai";
 import type { TypixGenerateRequest } from "../types/api";
 import type { AiProvider, ApiProviderSettings, ApiProviderSettingsItem } from "../types/provider";
@@ -153,8 +154,16 @@ const Google: AiProvider = {
 			enabledByDefault: true,
 		},
 	],
-	parseSettings: <GoogleSettings>(settings: ApiProviderSettings) => {
-		return doParseSettings(settings, googleSettingsSchema) as GoogleSettings;
+	parseSettings: <T>(settings: ApiProviderSettings) => {
+		const parsed = doParseSettings(settings, googleSettingsSchema) as GoogleSettings;
+		if (parsed.baseURL) {
+			parsed.baseURL = assertSafePublicUrl(parsed.baseURL);
+			const host = new URL(parsed.baseURL).hostname.toLowerCase();
+			if (host !== "googleapis.com" && !host.endsWith(".googleapis.com")) {
+				throw new Error("Custom Google endpoints must be configured as relay stations");
+			}
+		}
+		return parsed as T;
 	},
 	generate: async (request, settings) => {
 		try {

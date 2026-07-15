@@ -1,4 +1,12 @@
 import { extractImagesFromAny } from "@/server/lib/image-parse";
+import {
+	MAX_PROVIDER_RESPONSE_BYTES,
+	MAX_REMOTE_IMAGE_BYTES,
+	assertSafePublicUrl,
+	fetchPublicUrl,
+	readResponseBytes,
+	readResponseText,
+} from "@/server/lib/ssrf";
 import type { TypixChatApiResponse, TypixGenerateRequest } from "../types/api";
 import { normalizeOpenAIBaseURL } from "./relay-presets";
 import { generateImageViaResponsesApi } from "./responses-image";
@@ -86,7 +94,7 @@ export async function generateViaEndpointPaths(params: {
 	const hasImages = !!(params.request.images && params.request.images.length > 0);
 	const kind = pickEndpointKind(hasImages, params.preferEdit);
 	const path = endpoints[kind];
-	const url = joinUrl(baseURL, path);
+	const url = assertSafePublicUrl(joinUrl(baseURL, path));
 	const model = params.model;
 	const n = params.request.n || 1;
 	const size =
@@ -113,7 +121,7 @@ export async function generateViaEndpointPaths(params: {
 
 		if (kind === "t2i") {
 			// Prefer url so we can store short https links in D1 (base64 often exceeds D1 row limit)
-			resp = await fetch(url, {
+			resp = await fetchPublicUrl(url, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${params.apiKey}`,
@@ -146,9 +154,11 @@ export async function generateViaEndpointPaths(params: {
 				const dataUri = images[0];
 				if (dataUri.startsWith("http")) {
 					// multipart needs file bytes — fetch
-					const r = await fetch(dataUri);
-					const buf = await r.arrayBuffer();
-					const mime = r.headers.get("content-type") || "image/png";
+					const r = await fetchPublicUrl(dataUri);
+					if (!r.ok) throw new Error(`Failed to fetch input image: ${r.status}`);
+					const mime = (r.headers.get("content-type") || "").split(";")[0]!;
+					if (!mime.startsWith("image/")) throw new Error("Input URL did not return an image");
+					const buf = await readResponseBytes(r, MAX_REMOTE_IMAGE_BYTES);
 					const ext = mime.split("/")[1] || "png";
 					form.append("image", new Blob([buf], { type: mime }), `image.${ext}`);
 				} else {
@@ -159,9 +169,11 @@ export async function generateViaEndpointPaths(params: {
 			for (let i = 1; i < images.length; i++) {
 				const img = images[i]!;
 				if (img.startsWith("http")) {
-					const r = await fetch(img);
-					const buf = await r.arrayBuffer();
-					const mime = r.headers.get("content-type") || "image/png";
+					const r = await fetchPublicUrl(img);
+					if (!r.ok) throw new Error(`Failed to fetch input image: ${r.status}`);
+					const mime = (r.headers.get("content-type") || "").split(";")[0]!;
+					if (!mime.startsWith("image/")) throw new Error("Input URL did not return an image");
+					const buf = await readResponseBytes(r, MAX_REMOTE_IMAGE_BYTES);
 					form.append("image[]", new Blob([buf], { type: mime }), `image${i}.png`);
 				} else {
 					const { blob, filename } = dataUriToBlob(img);
@@ -170,7 +182,7 @@ export async function generateViaEndpointPaths(params: {
 				}
 			}
 
-			resp = await fetch(url, {
+			resp = await fetchPublicUrl(url, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${params.apiKey}`,
@@ -179,7 +191,7 @@ export async function generateViaEndpointPaths(params: {
 			});
 		}
 
-		const text = await resp.text();
+		const text = await readResponseText(resp, MAX_PROVIDER_RESPONSE_BYTES);
 		let json: any = null;
 		try {
 			json = JSON.parse(text);
@@ -190,12 +202,8 @@ export async function generateViaEndpointPaths(params: {
 		if (!resp.ok) {
 			const msg = json?.error?.message || json?.message || text.slice(0, 300);
 			// Some relays reject response_format=url — retry once without it / with b64
-			if (
-				kind === "t2i" &&
-				/response_format|unknown|invalid/i.test(String(msg)) &&
-				!params.preferEdit
-			) {
-				const retry = await fetch(url, {
+			if (kind === "t2i" && /response_format|unknown|invalid/i.test(String(msg)) && !params.preferEdit) {
+				const retry = await fetchPublicUrl(url, {
 					method: "POST",
 					headers: {
 						Authorization: `Bearer ${params.apiKey}`,
@@ -210,7 +218,7 @@ export async function generateViaEndpointPaths(params: {
 						...(height ? { height } : {}),
 					}),
 				});
-				const retryText = await retry.text();
+				const retryText = await readResponseText(retry, MAX_PROVIDER_RESPONSE_BYTES);
 				let retryJson: any = null;
 				try {
 					retryJson = JSON.parse(retryText);

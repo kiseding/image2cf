@@ -1,6 +1,8 @@
+import { eq } from "drizzle-orm";
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import type { DrizzleDb } from "../db";
+import { user as userTable } from "../db/schemas";
 import type { createAuth } from "../lib/auth";
 import type { Code } from "../lib/exception";
 
@@ -34,12 +36,15 @@ export type Env = {
 		DB: D1Database;
 		AI: Ai;
 		R2?: R2Bucket;
+		GENERATION_QUEUE?: Queue;
 		EMAIL: string;
 		RESEND_APIKEY: string;
 		PROVIDER_CLOUDFLARE_BUILTIN?: "true" | "false";
 		// Admin bootstrap (set as Worker Secret in Dashboard)
 		ADMIN_PASSWORD?: string;
 		ADMIN_NAME?: string;
+		BETTER_AUTH_SECRET?: string;
+		CREDENTIALS_SECRET?: string;
 		AUTH_EMAIL_VERIFICATION_ENABLED?: "true" | "false";
 		AUTH_EMAIL_RESEND_API_KEY?: string;
 		AUTH_EMAIL_RESEND_FROM?: string;
@@ -66,17 +71,22 @@ export type Env = {
 };
 
 export const authMiddleware = createMiddleware<Env>(async (c, next) => {
-	// if path follow /api/xxx/no-auth/, skip auth check
-	const regex = /^\/api\/[^/]+\/no-auth\//;
-	if (regex.test(c.req.path)) {
-		return await next();
-	}
-
 	const user = c.var.user;
 
 	if (!user) {
 		throw new HTTPException(401, { message: "Authentication required" });
 	}
+
+	const currentUser = await c.var.db.query.user.findFirst({
+		where: eq(userTable.id, user.id),
+	});
+	if (!currentUser) {
+		throw new HTTPException(401, { message: "Authentication required" });
+	}
+	if (currentUser.banned) {
+		throw new HTTPException(403, { message: "User is banned" });
+	}
+	c.set("user", currentUser as AuthUser);
 
 	await next();
 });

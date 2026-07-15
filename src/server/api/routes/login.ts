@@ -5,8 +5,16 @@ import z from "zod/v4";
 import { normalizeUsername, usernameToEmail } from "@/server/lib/auth";
 import { hashPassword, verifyPassword } from "@/server/lib/password";
 import { readWorkerEnv } from "@/server/lib/worker-env";
-import { rateLimit } from "@/server/lib/rate-limit";
+import { distributedRateLimit } from "@/server/lib/distributed-rate-limit";
 import { type Env, error } from "../util";
+
+const invalidCredentials = () => error("unauthorized", "Invalid username or password");
+let dummyPasswordHash: Promise<string> | undefined;
+
+function getDummyPasswordHash() {
+	dummyPasswordHash ??= hashPassword(`invalid-${nanoid(32)}`);
+	return dummyPasswordHash;
+}
 
 /**
  * Username + password login.
@@ -27,14 +35,21 @@ const app = new Hono<Env>().basePath("/login").post(
 		const d1 = c.env.DB;
 		const auth = c.var.auth;
 		const workerEnv = readWorkerEnv(c.env as any);
-		const ip = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for") || "unknown";
-		const rl = rateLimit(`login:${ip}:${uname}`, 20, 60_000);
-		if (!rl.ok) {
-			return c.json(error("error", "Too many login attempts, try later"), 429);
-		}
-
 		if (!d1) {
 			return c.json(error("error", "Database unavailable"), 500);
+		}
+		const ip = (
+			c.req.header("cf-connecting-ip") ||
+			c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+			"unknown"
+		).slice(0, 64);
+		const limits = await Promise.all([
+			distributedRateLimit(d1, `login:ip:${ip}`, 60, 60_000),
+			distributedRateLimit(d1, `login:account:${uname}`, 10, 60_000),
+			distributedRateLimit(d1, `login:pair:${ip}:${uname}`, 5, 60_000),
+		]);
+		if (limits.some((limit) => !limit.ok)) {
+			return c.json(error("error", "Too many login attempts, try later"), 429);
 		}
 
 		try {
@@ -44,29 +59,25 @@ const app = new Hono<Env>().basePath("/login").post(
 				user = await ensureAdmin(d1, password, workerEnv.ADMIN_NAME || "Admin");
 			}
 
-			if (!user) {
-				console.error("[image2cf] login user not found:", uname);
-				return c.json(error("unauthorized", "Invalid username or password"), 401);
-			}
+			const account = user
+				? await d1
+						.prepare(
+							`SELECT id, password FROM account WHERE user_id = ? AND provider_id = 'credential' LIMIT 1`,
+						)
+						.bind(user.id)
+						.first<{ id: string; password: string | null }>()
+				: null;
 
-			if (Number(user.banned) === 1) {
-				return c.json(error("forbidden", "User is banned"), 403);
-			}
-
-			const account = await d1
-				.prepare(
-					`SELECT id, password FROM account WHERE user_id = ? AND provider_id = 'credential' LIMIT 1`,
-				)
-				.bind(user.id)
-				.first<{ id: string; password: string | null }>();
-
-			let valid = account?.password ? await verifyPassword(account.password, password) : false;
+			let valid = await verifyPassword(account?.password || (await getDummyPasswordHash()), password);
+			valid = valid && !!account?.password;
 
 			// Emergency recovery: only when credential hash is missing (not a permanent dual password)
-			const isAdmin = user.role === "admin" || uname === "admin";
+			const isAdmin = user?.role === "admin" || uname === "admin";
 			if (
+				user &&
 				!valid &&
 				isAdmin &&
+				Number(user.banned) !== 1 &&
 				!account?.password &&
 				workerEnv.ADMIN_PASSWORD &&
 				password === workerEnv.ADMIN_PASSWORD
@@ -88,9 +99,9 @@ const app = new Hono<Env>().basePath("/login").post(
 				console.log("[image2cf] admin credential repaired from ADMIN_PASSWORD (empty hash)");
 			}
 
-			if (!valid) {
-				console.error("[image2cf] login bad password for", user.id);
-				return c.json(error("unauthorized", "Invalid username or password"), 401);
+			if (!user || !valid || Number(user.banned) === 1) {
+				console.warn("[image2cf] login rejected");
+				return c.json(invalidCredentials(), 401);
 			}
 
 			if (!user.username) {

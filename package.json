@@ -2,6 +2,7 @@
 	"name": "image2cf",
 	"private": true,
 	"version": "1.0.9",
+	"packageManager": "pnpm@9.15.9",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -11,6 +12,7 @@
 		"analyze": "vite build --mode analyze",
 		"fmt": "biome format --write .",
 		"lint": "eslint .",
+		"test": "node --experimental-strip-types --test tests/*.test.mjs",
 		"preview": "vite preview",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",

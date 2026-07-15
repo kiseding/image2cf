@@ -11,7 +11,7 @@ import {
 } from "@/server/service/chat";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
-import { rateLimit } from "@/server/lib/rate-limit";
+import { distributedRateLimit } from "@/server/lib/distributed-rate-limit";
 import { type Env, authMiddleware, error, ok } from "../util";
 
 const app = new Hono<Env>()
@@ -61,7 +61,7 @@ const app = new Hono<Env>()
 	.post("/createMessage", zValidator("json", CreateMessageSchema), async (c) => {
 		const user = c.var.user!;
 		const req = c.req.valid("json");
-		const rl = rateLimit(`msg:${user.id}`, 60, 60_000);
+		const rl = await distributedRateLimit(c.env.DB, `msg:${user.id}`, 60, 60_000);
 		if (!rl.ok) {
 			return c.json(error("error", "Too many messages, try later"), 429);
 		}
@@ -84,7 +84,7 @@ const app = new Hono<Env>()
 	.post("/createMessageGenerate", zValidator("json", CreateMessageGenerateSchema), async (c) => {
 		const user = c.var.user!;
 		const req = c.req.valid("json");
-		const rl = rateLimit(`gen:${user.id}`, 30, 60_000);
+		const rl = await distributedRateLimit(c.env.DB, `gen:${user.id}`, 30, 60_000);
 		if (!rl.ok) {
 			return c.json(error("error", "Too many generation requests, try later"), 429);
 		}

@@ -1,17 +1,61 @@
 import { getProviderById } from "@/server/ai/provider";
 import { generateViaRelay } from "@/server/ai/provider/relay";
 import { type ApiProviderSettings, ConfigInvalidError } from "@/server/ai/types/provider";
+import type { DrizzleDb } from "@/server/db";
 import { chats, messageAttachments, messageGenerations, messages } from "@/server/db/schemas";
 import { createSchemaOmits } from "@/server/db/util";
 import { inBrowser, inCfWorker } from "@/server/lib/env";
 import { ServiceException } from "@/server/lib/exception";
-import { and, desc, eq, inArray, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { createInsertSchema, createUpdateSchema } from "drizzle-zod";
 import z from "zod/v4";
-import { aiService } from "../ai";
-import { type RequestContext, getContext } from "../context";
-import { deleteStoredFiles, getFileData, getFileUrl, saveFiles } from "../file/storage";
+import { aiService, getAiProviderByIdWithSecrets } from "../ai";
+import { type GenerationQueueMessage, type RequestContext, getContext } from "../context";
+import {
+	ALLOWED_IMAGE_MIMES,
+	MAX_ATTACHMENTS_TOTAL_BYTES,
+	MAX_ATTACHMENT_BYTES,
+	MAX_ATTACHMENT_COUNT,
+	deleteStoredFiles,
+	getFileData,
+	getFileUrl,
+	saveFiles,
+} from "../file/storage";
 import { relayService } from "../relay";
+
+const AttachmentDataSchema = z.string().superRefine((value, ctx) => {
+	const match = value.match(/^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/i);
+	if (!match?.[1] || !match[2]) {
+		ctx.addIssue({ code: "custom", message: "Image must be a base64 data URI" });
+		return;
+	}
+	if (!(ALLOWED_IMAGE_MIMES as readonly string[]).includes(match[1].toLowerCase())) {
+		ctx.addIssue({ code: "custom", message: "Unsupported image MIME type" });
+	}
+	const estimatedBytes =
+		Math.floor((match[2].length * 3) / 4) - (match[2].endsWith("==") ? 2 : match[2].endsWith("=") ? 1 : 0);
+	if (estimatedBytes > MAX_ATTACHMENT_BYTES) {
+		ctx.addIssue({ code: "custom", message: "Image exceeds the per-file size limit" });
+	}
+});
+
+const AttachmentArraySchema = z
+	.array(
+		z.object({
+			data: AttachmentDataSchema,
+			type: z.enum(["image"]).default("image"),
+		}),
+	)
+	.max(MAX_ATTACHMENT_COUNT)
+	.superRefine((attachments, ctx) => {
+		const total = attachments.reduce((sum, attachment) => {
+			const b64 = attachment.data.split(",")[1] || "";
+			return sum + Math.floor((b64.length * 3) / 4);
+		}, 0);
+		if (total > MAX_ATTACHMENTS_TOTAL_BYTES) {
+			ctx.addIssue({ code: "custom", message: "Images exceed the total size limit" });
+		}
+	});
 
 export const CreateChatSchema = createInsertSchema(chats)
 	.pick({
@@ -37,19 +81,12 @@ export const CreateChatSchema = createInsertSchema(chats)
 		/**
 		 * Attachments for the first message
 		 */
-		attachments: z
-			.array(
-				z.object({
-					data: z.string(), // base64 data
-					type: z.enum(["image"]).default("image"),
-				}),
-			)
-			.optional(),
+		attachments: AttachmentArraySchema.optional(),
 		/**
 		 * @deprecated Use attachments instead
 		 * Data URI (base64) images
 		 */
-		images: z.array(z.string()).optional(),
+		images: z.array(AttachmentDataSchema).max(MAX_ATTACHMENT_COUNT).optional(),
 	});
 export type CreateChat = z.infer<typeof CreateChatSchema>;
 /** Next sequential title: 新创作 1, 新创作 2, ... (also accepts "New Chat N") */
@@ -425,19 +462,12 @@ export const CreateMessageSchema = createInsertSchema(messages)
 		/**
 		 * base64-encoded image strings for attachments
 		 */
-		attachments: z
-			.array(
-				z.object({
-					data: z.string(), // base64 data
-					type: z.enum(["image"]).default("image"),
-				}),
-			)
-			.optional(),
+		attachments: AttachmentArraySchema.optional(),
 		/**
 		 * @deprecated Use attachments instead
 		 * base64-encoded image strings
 		 */
-		images: z.array(z.string()).optional(),
+		images: z.array(AttachmentDataSchema).max(MAX_ATTACHMENT_COUNT).optional(),
 	});
 export type CreateMessage = z.infer<typeof CreateMessageSchema>;
 type CreateMessageResponse = Pick<NonNullable<Awaited<ReturnType<typeof getChatById>>>, "messages">;
@@ -445,6 +475,7 @@ type CreateMessageResponse = Pick<NonNullable<Awaited<ReturnType<typeof getChatB
 // Common image generation logic
 interface GenerationParams {
 	generationId: string;
+	attempt: number;
 	prompt: string;
 	provider: string;
 	model: string;
@@ -462,6 +493,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 	const { db } = getContext();
 	const {
 		generationId,
+		attempt,
 		prompt,
 		provider: providerId,
 		model: modelId,
@@ -564,7 +596,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			});
 		} else {
 			const providerInstance = getProviderById(providerId);
-			const provider = await aiService.getAiProviderById({ providerId }, ctx);
+			const provider = await getAiProviderByIdWithSecrets({ providerId }, ctx);
 			const settings =
 				provider?.settings?.reduce((acc, setting) => {
 					const value = setting.value ?? setting.defaultValue;
@@ -583,7 +615,13 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 					errorReason: result.errorReason,
 					updatedAt: now.toISOString(),
 				})
-				.where(eq(messageGenerations.id, generationId));
+				.where(
+					and(
+						eq(messageGenerations.id, generationId),
+						eq(messageGenerations.attempt, attempt),
+						eq(messageGenerations.status, "generating"),
+					),
+				);
 			return;
 		}
 
@@ -596,7 +634,13 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 					errorReason: "API_ERROR",
 					updatedAt: now.toISOString(),
 				})
-				.where(eq(messageGenerations.id, generationId));
+				.where(
+					and(
+						eq(messageGenerations.id, generationId),
+						eq(messageGenerations.attempt, attempt),
+						eq(messageGenerations.status, "generating"),
+					),
+				);
 			return;
 		}
 
@@ -610,19 +654,36 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 					errorReason: "API_ERROR",
 					updatedAt: now.toISOString(),
 				})
-				.where(eq(messageGenerations.id, generationId));
+				.where(
+					and(
+						eq(messageGenerations.id, generationId),
+						eq(messageGenerations.attempt, attempt),
+						eq(messageGenerations.status, "generating"),
+					),
+				);
 			return;
 		}
 
-		await db
+		const completed = await db
 			.update(messageGenerations)
 			.set({
 				status: "completed",
 				fileIds,
 				generationTime: Date.now() - now.getTime(),
-				updatedAt: now.toISOString(),
+				updatedAt: new Date().toISOString(),
 			})
-			.where(eq(messageGenerations.id, generationId));
+			.where(
+				and(
+					eq(messageGenerations.id, generationId),
+					eq(messageGenerations.attempt, attempt),
+					eq(messageGenerations.status, "generating"),
+				),
+			)
+			.returning();
+		if (!completed.length) {
+			// A newer regeneration owns the row, so this attempt's files are no longer reachable.
+			await deleteStoredFiles(fileIds, userId);
+		}
 	} catch (error) {
 		console.error("Error generating image:", error);
 		const msg = error instanceof Error ? error.message : String(error);
@@ -635,7 +696,13 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				errorReason: error instanceof ConfigInvalidError ? "CONFIG_INVALID" : isSize ? "API_ERROR" : "UNKNOWN",
 				updatedAt: new Date().toISOString(),
 			})
-			.where(eq(messageGenerations.id, generationId));
+			.where(
+				and(
+					eq(messageGenerations.id, generationId),
+					eq(messageGenerations.attempt, attempt),
+					eq(messageGenerations.status, "generating"),
+				),
+			);
 		return;
 	}
 };
@@ -675,6 +742,7 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 		const attachmentFileIds = await saveFiles(
 			req.attachments.map((att) => att.data),
 			userId,
+			true,
 		);
 
 		// Create attachment records and prepare results
@@ -776,30 +844,6 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 		return null;
 	}
 
-	// Check if generation is still pending/generating but has exceeded 5 minutes
-	if (generation.status === "pending" || generation.status === "generating") {
-		const lastGenTime = new Date(generation.updatedAt);
-		const now = new Date();
-		const elapsedMinutes = (now.getTime() - lastGenTime.getTime()) / 1000 / 60;
-
-		if (elapsedMinutes > 5) {
-			// Mark as failed due to timeout
-			type UpdateGeneration = Pick<typeof generation, "status" | "errorReason" | "updatedAt">;
-			const updateData = {
-				status: "failed",
-				errorReason: "TIMEOUT",
-				updatedAt: now.toISOString(),
-			} as UpdateGeneration;
-			await db.update(messageGenerations).set(updateData).where(eq(messageGenerations.id, req.generationId));
-
-			return {
-				...generation,
-				...updateData,
-				resultUrls: undefined,
-			};
-		}
-	}
-
 	return {
 		...generation,
 		resultUrls: generation.fileIds
@@ -817,94 +861,129 @@ export const CreateMessageGenerateSchema = z.object({
 });
 export type CreateMessageGenerate = z.infer<typeof CreateMessageGenerateSchema>;
 const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestContext) => {
-	const { db } = getContext();
+	const { db, generationQueue } = getContext();
 	const { userId } = ctx;
-
-	// Find the generation record
-	const generation = await db.query.messageGenerations.findFirst({
-		where: eq(messageGenerations.id, req.generationId),
-	});
-
-	if (!generation || generation.userId !== userId) {
-		throw new ServiceException("not_found", "Generation not found");
-	}
-
-	// Idempotent: already finished or in flight
-	if (generation.status === "completed") {
-		return { success: true, skipped: true };
-	}
-	if (generation.status === "generating") {
-		return { success: true, skipped: true };
-	}
-
-	// Find the message associated with this generation
-	const message = await db.query.messages.findFirst({
-		where: eq(messages.generationId, req.generationId),
-		with: {
-			chat: true,
-			attachments: {
-				with: {
-					file: true,
-				},
-			},
-		},
-	});
-
-	if (!message || message.userId !== userId) {
-		throw new ServiceException("not_found", "Message not found");
-	}
-
-	// Get user images from the parent user message (previous message in chat)
-	const userMessage = await db.query.messages.findFirst({
-		where: and(eq(messages.chatId, message.chatId), eq(messages.role, "user"), eq(messages.type, "text")),
-		orderBy: [desc(messages.createdAt)],
-		with: {
-			attachments: {
-				with: {
-					file: true,
-				},
-			},
-		},
-	});
-
-	const userImages = userMessage?.attachments.length
-		? await Promise.all(userMessage.attachments.map(async (att) => await getFileData(att.fileId, userId)))
-		: undefined;
-
-	// Mark generating so UI polling knows work started
-	await db
+	const [generation] = await db
 		.update(messageGenerations)
-		.set({ status: "generating", updatedAt: new Date().toISOString() })
-		.where(eq(messageGenerations.id, generation.id));
+		.set({
+			status: "generating",
+			attempt: sql`${messageGenerations.attempt} + 1`,
+			errorReason: null,
+			updatedAt: new Date().toISOString(),
+		})
+		.where(
+			and(
+				eq(messageGenerations.id, req.generationId),
+				eq(messageGenerations.userId, userId),
+				or(eq(messageGenerations.status, "pending"), eq(messageGenerations.status, "failed")),
+			),
+		)
+		.returning();
 
-	// Extract parameters from generation record
-	const params = generation.parameters as any;
-	const imageCount = params?.imageCount || 1;
-	const width = params?.width;
-	const height = params?.height;
-	const aspectRatio = params?.aspectRatio;
+	if (!generation) {
+		const existing = await db.query.messageGenerations.findFirst({
+			where: and(eq(messageGenerations.id, req.generationId), eq(messageGenerations.userId, userId)),
+			columns: { status: true, attempt: true },
+		});
+		if (!existing) throw new ServiceException("not_found", "Generation not found");
+		return { success: true, skipped: true, status: existing.status, attempt: existing.attempt };
+	}
 
-	// Execute image generation
-	await executeImageGeneration(
-		{
-			generationId: generation.id,
-			prompt: generation.prompt,
-			provider: generation.provider,
-			model: generation.model,
-			chatId: message.chatId,
-			userId,
-			userImages: userImages?.filter(Boolean) as string[] | undefined,
-			imageCount,
-			width,
-			height,
-			aspectRatio,
-			messageId: message.id,
-		},
-		ctx,
-	);
+	const message: GenerationQueueMessage = {
+		generationId: generation.id,
+		userId,
+		attempt: generation.attempt,
+	};
+	if (generationQueue) {
+		try {
+			await generationQueue.send(message, { contentType: "json" });
+			return { success: true, accepted: true, queued: true, attempt: generation.attempt };
+		} catch (error) {
+			await db
+				.update(messageGenerations)
+				.set({ status: "failed", errorReason: "UNKNOWN", updatedAt: new Date().toISOString() })
+				.where(
+					and(
+						eq(messageGenerations.id, generation.id),
+						eq(messageGenerations.attempt, generation.attempt),
+						eq(messageGenerations.status, "generating"),
+					),
+				);
+			throw error;
+		}
+	}
 
-	return { success: true };
+	const task = processClaimedGeneration(message, ctx);
+
+	if (ctx.executionCtx && !ctx.blockGenerate) {
+		ctx.executionCtx.waitUntil(task);
+		return { success: true, accepted: true, queued: false, attempt: generation.attempt };
+	}
+	await task;
+	return { success: true, attempt: generation.attempt };
 };
+
+export async function processClaimedGeneration(job: GenerationQueueMessage, ctx: RequestContext) {
+	const { db } = getContext();
+	const generation = await db.query.messageGenerations.findFirst({
+		where: and(
+			eq(messageGenerations.id, job.generationId),
+			eq(messageGenerations.userId, job.userId),
+			eq(messageGenerations.attempt, job.attempt),
+			eq(messageGenerations.status, "generating"),
+		),
+	});
+	if (!generation) return;
+
+	await (async () => {
+		try {
+			const message = await db.query.messages.findFirst({
+				where: and(eq(messages.generationId, generation.id), eq(messages.userId, job.userId)),
+			});
+			if (!message) throw new Error("Message not found for claimed generation");
+
+			const userMessage = await db.query.messages.findFirst({
+				where: and(eq(messages.chatId, message.chatId), eq(messages.role, "user"), eq(messages.type, "text")),
+				orderBy: [desc(messages.createdAt)],
+				with: { attachments: true },
+			});
+			const userImages = userMessage?.attachments.length
+				? await Promise.all(userMessage.attachments.map((att) => getFileData(att.fileId, job.userId)))
+				: undefined;
+			const params = generation.parameters as any;
+			await executeImageGeneration(
+				{
+					generationId: generation.id,
+					attempt: generation.attempt,
+					prompt: generation.prompt,
+					provider: generation.provider,
+					model: generation.model,
+					chatId: message.chatId,
+					userId: job.userId,
+					userImages: userImages?.filter(Boolean) as string[] | undefined,
+					imageCount: params?.imageCount || 1,
+					width: params?.width,
+					height: params?.height,
+					aspectRatio: params?.aspectRatio,
+					messageId: message.id,
+				},
+				{ ...ctx, userId: job.userId },
+			);
+		} catch (error) {
+			console.error("Failed to run claimed generation:", error);
+			await db
+				.update(messageGenerations)
+				.set({ status: "failed", errorReason: "UNKNOWN", updatedAt: new Date().toISOString() })
+				.where(
+					and(
+						eq(messageGenerations.id, generation.id),
+						eq(messageGenerations.attempt, generation.attempt),
+						eq(messageGenerations.status, "generating"),
+					),
+				);
+		}
+	})();
+}
 
 export const RegenerateMessageSchema = z.object({
 	messageId: z.string(),
@@ -937,18 +1016,27 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 	if (!chat) {
 		throw new ServiceException("not_found", "Chat not found");
 	}
+	const previousFileIds = Array.isArray(originalGeneration.fileIds)
+		? (originalGeneration.fileIds as string[])
+		: [];
 
-	// Reset the existing generation record to pending status
-	await db
+	// Incrementing the version immediately prevents any older execution from publishing.
+	const [regenerated] = await db
 		.update(messageGenerations)
 		.set({
 			status: "pending",
+			attempt: sql`${messageGenerations.attempt} + 1`,
 			fileIds: null, // Clear previous results
 			errorReason: null, // Clear previous errors
 			generationTime: null, // Clear previous timing
 			updatedAt: new Date().toISOString(),
 		})
-		.where(eq(messageGenerations.id, originalGeneration.id));
+		.where(and(eq(messageGenerations.id, originalGeneration.id), eq(messageGenerations.userId, userId)))
+		.returning();
+	if (!regenerated) throw new ServiceException("not_found", "Generation not found");
+	if (previousFileIds.length) {
+		await deleteStoredFiles(previousFileIds, userId);
+	}
 
 	// Reset message content while regenerating
 	await db
@@ -961,14 +1049,35 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 	// Update chat timestamp
 	await db.update(chats).set({ updatedAt: new Date().toISOString() }).where(eq(chats.id, chat.id));
 
-	// Don't execute image generation here - client will call createMessageGenerate
-	// This avoids CF Worker 30-second timeout limitation
+	// Start server-side. The existing client trigger remains safe because the claim is atomic.
+	await createMessageGenerate({ generationId: originalGeneration.id }, ctx);
 
 	return {
 		messageId: req.messageId,
 		generationId: originalGeneration.id, // Return the existing generation ID
 	};
 };
+
+export async function recoverStaleGenerations(
+	db: DrizzleDb,
+	staleBefore = new Date(Date.now() - 15 * 60_000).toISOString(),
+) {
+	return await db
+		.update(messageGenerations)
+		.set({
+			status: "failed",
+			attempt: sql`${messageGenerations.attempt} + 1`,
+			errorReason: "TIMEOUT",
+			updatedAt: new Date().toISOString(),
+		})
+		.where(
+			and(
+				or(eq(messageGenerations.status, "pending"), eq(messageGenerations.status, "generating")),
+				lt(messageGenerations.updatedAt, staleBefore),
+			),
+		)
+		.returning();
+}
 
 class ChatService {
 	createChat = createChat;

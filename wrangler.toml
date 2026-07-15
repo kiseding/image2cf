@@ -26,10 +26,21 @@ binding = "AI"
 binding = "R2"
 bucket_name = "image2cf"
 
-# Daily cron: purge R2 object bytes older than R2_RETENTION_DAYS
+[[queues.producers]]
+binding = "GENERATION_QUEUE"
+queue = "image2cf-generation"
+
+[[queues.consumers]]
+queue = "image2cf-generation"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 3
+dead_letter_queue = "image2cf-generation-dlq"
+
+# Five-minute generation recovery plus daily R2 object retention cleanup
 # Preview links in D1 remain permanent; expired objects return HTTP 410
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["*/5 * * * *", "0 3 * * *"]
 
 [vars]
 # File storage: base64 | r2 (default r2 when R2 binding present)
@@ -52,6 +63,7 @@ MODE = "mixed"
 # Bootstrap admin (username fixed as "admin"; set via Dashboard Secrets)
 # ADMIN_PASSWORD = "change-me"
 # ADMIN_NAME = "Admin"
+# CREDENTIALS_SECRET should be set with `wrangler secret put CREDENTIALS_SECRET`
 # GOOGLE_ANALYTICS_ID = "G-0T65G1J5DT"
 
 # Authentication configuration, only for mixed mode

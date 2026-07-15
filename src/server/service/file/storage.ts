@@ -1,5 +1,6 @@
 import { type Storage, files } from "@/server/db/schemas";
 import { inBrowser } from "@/server/lib/env";
+import { MAX_REMOTE_IMAGE_BYTES, assertSafePublicUrl, fetchPublicUrl, readResponseBytes } from "@/server/lib/ssrf";
 import { base64ToDataURI, fetchUrlToDataURI } from "@/server/lib/util";
 import { and, eq } from "drizzle-orm";
 import { getContext } from "../context";
@@ -18,15 +19,47 @@ function resolveStorageMode(): Storage {
 	return "base64";
 }
 
+export const MAX_ATTACHMENT_COUNT = 8;
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+export const MAX_ATTACHMENTS_TOTAL_BYTES = 20 * 1024 * 1024;
+export const ALLOWED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"] as const;
+
+function detectImageMime(bytes: Uint8Array): (typeof ALLOWED_IMAGE_MIMES)[number] | null {
+	if (bytes.length >= 8 && bytes.slice(0, 8).every((byte, i) => byte === [137, 80, 78, 71, 13, 10, 26, 10][i])) {
+		return "image/png";
+	}
+	if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+	const ascii = (start: number, length: number) => String.fromCharCode(...bytes.slice(start, start + length));
+	if (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a") return "image/gif";
+	if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return "image/webp";
+	if (ascii(4, 4) === "ftyp" && ["avif", "avis"].includes(ascii(8, 4))) return "image/avif";
+	return null;
+}
+
+function assertImageBytes(bytes: Uint8Array, declaredMime: string): void {
+	const detected = detectImageMime(bytes);
+	if (!detected || detected !== declaredMime) throw new Error("Image content does not match its declared MIME type");
+}
+
 function parseDataUri(dataUri: string): { mime: string; bytes: Uint8Array; ext: string } {
-	const [meta, b64] = dataUri.split(",");
-	if (!b64 || !meta) throw new Error("Invalid DataURI");
-	const mimeMatch = meta.match(/data:([^;]+)/);
-	const mime = mimeMatch?.[1] || "image/png";
+	const match = dataUri.match(/^(data:[^;,]+;base64),([A-Za-z0-9+/]*={0,2})$/i);
+	const meta = match?.[1];
+	const b64 = match?.[2];
+	if (!b64 || !meta) {
+		throw new Error("Invalid base64 DataURI");
+	}
+	const mime = meta.slice(5, meta.indexOf(";")).toLowerCase();
+	if (!(ALLOWED_IMAGE_MIMES as readonly string[]).includes(mime)) {
+		throw new Error(`Unsupported image MIME type: ${mime}`);
+	}
+	const estimatedBytes = Math.floor((b64.length * 3) / 4) - (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
+	if (estimatedBytes > MAX_ATTACHMENT_BYTES) throw new Error("Image exceeds the per-file size limit");
 	const ext = (mime.split("/")[1] || "png").replace("+xml", "");
 	const binary = atob(b64);
+	if (binary.length > MAX_ATTACHMENT_BYTES) throw new Error("Image exceeds the per-file size limit");
 	const bytes = new Uint8Array(binary.length);
 	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	assertImageBytes(bytes, mime);
 	return { mime, bytes, ext };
 }
 
@@ -40,11 +73,15 @@ async function toBytes(fileData: string): Promise<{ mime: string; bytes: Uint8Ar
 		return parseDataUri(fileData);
 	}
 	if (/^https?:\/\//i.test(fileData)) {
-		const resp = await fetch(fileData);
+		const resp = await fetchPublicUrl(fileData);
 		if (!resp.ok) throw new Error(`Failed to download image: ${resp.status}`);
-		const mime = resp.headers.get("content-type") || "image/png";
+		const mime = (resp.headers.get("content-type") || "").split(";")[0]!.toLowerCase();
+		if (!(ALLOWED_IMAGE_MIMES as readonly string[]).includes(mime)) {
+			throw new Error("Remote URL did not return a supported image");
+		}
 		const ext = (mime.split("/")[1] || "png").split(";")[0] || "png";
-		const buf = new Uint8Array(await resp.arrayBuffer());
+		const buf = await readResponseBytes(resp, MAX_REMOTE_IMAGE_BYTES);
+		assertImageBytes(buf, mime);
 		return { mime, bytes: buf, ext };
 	}
 	// raw base64
@@ -97,16 +134,25 @@ const storageHandlers: Record<
 /** D1 practical limit for inline data URI when not using R2 */
 const MAX_INLINE_DATA_URI_CHARS = 800_000;
 
-export const saveFiles = async (fileDatas: string[], userId: string) => {
+export const saveFiles = async (fileDatas: string[], userId: string, enforceAttachmentLimits = false) => {
 	const { db, R2 } = getContext();
 
 	if (!fileDatas?.length) {
 		return [];
 	}
+	if (enforceAttachmentLimits) {
+		if (fileDatas.length > MAX_ATTACHMENT_COUNT) throw new Error(`Too many images (maximum ${MAX_ATTACHMENT_COUNT})`);
+		let totalBytes = 0;
+		for (const fileData of fileDatas) {
+			if (!fileData.startsWith("data:")) throw new Error("Uploaded images must be base64 data URIs");
+			totalBytes += parseDataUri(fileData).bytes.byteLength;
+			if (totalBytes > MAX_ATTACHMENTS_TOTAL_BYTES) throw new Error("Uploaded images exceed the total size limit");
+		}
+	}
 
 	const mode = resolveStorageMode();
 
-	const values = await Promise.all(
+	const settledValues = await Promise.allSettled(
 		fileDatas.map(async (file) => {
 			// 1) Remote URL from relay — store pointer only (never re-download into R2).
 			//    Re-download was a common hang: relay finished, worker stuck fetching/uploading.
@@ -114,7 +160,7 @@ export const saveFiles = async (fileDatas: string[], userId: string) => {
 				return {
 					userId,
 					storage: "base64" as Storage, // schema: free-form URL stored in url column
-					url: file,
+					url: assertSafePublicUrl(file),
 				};
 			}
 
@@ -127,9 +173,7 @@ export const saveFiles = async (fileDatas: string[], userId: string) => {
 					} catch (e) {
 						console.error("[storage] R2 put failed, trying inline", e);
 						if (file.length > MAX_INLINE_DATA_URI_CHARS) {
-							throw e instanceof Error
-								? e
-								: new Error("R2 upload failed and image too large for D1");
+							throw e instanceof Error ? e : new Error("R2 upload failed and image too large for D1");
 						}
 					}
 				}
@@ -153,8 +197,24 @@ export const saveFiles = async (fileDatas: string[], userId: string) => {
 			};
 		}),
 	);
+	const values = settledValues
+		.filter((result): result is PromiseFulfilledResult<typeof files.$inferInsert> => result.status === "fulfilled")
+		.map((result) => result.value);
+	const failed = settledValues.find((result): result is PromiseRejectedResult => result.status === "rejected");
+	if (failed) {
+		const keys = values.map((value) => r2KeyFromUrl(value.url)).filter((key): key is string => !!key);
+		await Promise.all(keys.map((key) => deleteR2WithRetry(R2, key, 3)));
+		throw failed.reason;
+	}
 
-	const filesSave = await db.insert(files).values(values).returning();
+	let filesSave: (typeof files.$inferSelect)[];
+	try {
+		filesSave = await db.insert(files).values(values).returning();
+	} catch (error) {
+		const keys = values.map((value) => r2KeyFromUrl(value.url)).filter((key): key is string => !!key);
+		await Promise.all(keys.map((key) => deleteR2WithRetry(R2, key, 3)));
+		throw error;
+	}
 	return filesSave.map((f) => f.id);
 };
 
@@ -218,7 +278,13 @@ export const getFileData = async (fileId: string, userId: string) => {
 		case "r2:": {
 			const obj = await getR2Object(metadata.accessUrl);
 			if (!obj) return null;
-			const buf = new Uint8Array(await obj.arrayBuffer());
+			if (obj.size > MAX_ATTACHMENT_BYTES) throw new Error("Stored image exceeds the processing size limit");
+			const buf = await readResponseBytes(
+				new Response(obj.body, {
+					headers: { "content-length": String(obj.size) },
+				}),
+				MAX_ATTACHMENT_BYTES,
+			);
 			const mime = obj.httpMetadata?.contentType || "image/png";
 			const ext = mime.split("/")[1] || "png";
 			// convert to base64
@@ -264,6 +330,19 @@ function r2KeyFromUrl(url: string): string | null {
 	return url.replace(/^r2:\/\//, "");
 }
 
+async function deleteR2WithRetry(R2: R2Bucket | undefined, key: string, attempts: number): Promise<boolean> {
+	if (!R2) return false;
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			await R2.delete(key);
+			return true;
+		} catch (error) {
+			console.error(`[storage] R2 delete failed (${attempt}/${attempts})`, key, error);
+		}
+	}
+	return false;
+}
+
 /**
  * Delete stored files (R2 objects + D1 rows). Safe to call with empty/unknown ids.
  * Returns how many D1 rows and R2 objects were removed.
@@ -287,13 +366,9 @@ export async function deleteStoredFiles(
 
 		if (row.storage === "r2" || row.url.startsWith("r2://")) {
 			const key = r2KeyFromUrl(row.url);
-			if (key && R2) {
-				try {
-					await R2.delete(key);
-					r2Deleted++;
-				} catch (e) {
-					console.error("[storage] R2 delete failed", key, e);
-				}
+			if (key) {
+				if (!(await deleteR2WithRetry(R2, key, 3))) continue;
+				r2Deleted++;
 			}
 		}
 
@@ -303,5 +378,3 @@ export async function deleteStoredFiles(
 
 	return { dbDeleted, r2Deleted };
 }
-
-

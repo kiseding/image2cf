@@ -81,6 +81,8 @@ const factory = createFactory<Env>({
 				providerCloudflareBuiltin: e.PROVIDER_CLOUDFLARE_BUILTIN === "true" || false,
 				debug: e.DEBUG === "true",
 				fileStorage: e.FILE_STORAGE || (e.R2 ? "r2" : "base64"),
+				credentialsSecret: e.CREDENTIALS_SECRET || e.BETTER_AUTH_SECRET || e.ADMIN_PASSWORD,
+				generationQueue: c.env.GENERATION_QUEUE,
 			});
 
 			if (!adminBootstrapDone) {

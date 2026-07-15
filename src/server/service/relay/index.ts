@@ -1,15 +1,16 @@
 import {
 	COMMON_IMAGE_MODELS,
+	type RelayProtocol,
 	guessImageModelMeta,
 	isLikelyImageModel,
 	normalizeRelayBaseURL,
-	type RelayProtocol,
 } from "@/server/ai/provider/relay-presets";
 import { userRelays } from "@/server/db/schemas";
+import { decryptCredential, encryptCredential } from "@/server/lib/credentials";
 import { ServiceException } from "@/server/lib/exception";
+import { MAX_PROVIDER_RESPONSE_BYTES, assertSafePublicUrl, fetchPublicUrl, readResponseText } from "@/server/lib/ssrf";
 import { and, desc, eq } from "drizzle-orm";
 import z from "zod/v4";
-import { assertSafePublicUrl } from "@/server/lib/ssrf";
 import { type RequestContext, getContext } from "../context";
 
 const RelayModelSchema = z.object({
@@ -79,37 +80,53 @@ export const ProbeRelaySchema = z.object({
 export type ProbeRelay = z.infer<typeof ProbeRelaySchema>;
 
 const listRelays = async (ctx: RequestContext) => {
-	const { db } = getContext();
+	const { db, credentialsSecret } = getContext();
 	const rows = await db.query.userRelays.findMany({
 		where: eq(userRelays.userId, ctx.userId),
 		orderBy: [desc(userRelays.createdAt)],
 	});
-	return rows.map((r) => ({
-		id: r.id,
-		name: r.name,
-		type: r.type,
-		baseURL: r.baseURL,
-		// mask api key for list view
-		apiKey: r.apiKey ? `${r.apiKey.slice(0, 4)}****${r.apiKey.slice(-4)}` : "",
-		hasApiKey: !!r.apiKey,
-		models: (r.models as RelayModel[]) || [],
-		apiMode: (r as any).apiMode || "endpoints",
-		endpoints: (r as any).endpoints || null,
-		enabled: r.enabled,
-		createdAt: r.createdAt,
-		updatedAt: r.updatedAt,
-	}));
+	return Promise.all(
+		rows.map(async (r) => {
+			const key = await decryptCredential(r.apiKey, credentialsSecret);
+			if (key && !r.apiKey.startsWith("enc:v1:")) {
+				await db
+					.update(userRelays)
+					.set({ apiKey: await encryptCredential(key, credentialsSecret) })
+					.where(eq(userRelays.id, r.id));
+			}
+			return {
+				id: r.id,
+				name: r.name,
+				type: r.type,
+				baseURL: r.baseURL,
+				apiKey: key ? `${key.slice(0, 4)}****${key.slice(-4)}` : "",
+				hasApiKey: !!key,
+				models: (r.models as RelayModel[]) || [],
+				apiMode: (r as any).apiMode || "endpoints",
+				endpoints: (r as any).endpoints || null,
+				enabled: r.enabled,
+				createdAt: r.createdAt,
+				updatedAt: r.updatedAt,
+			};
+		}),
+	);
 };
 
 const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
-	const { db } = getContext();
+	const { db, credentialsSecret } = getContext();
 	const row = await db.query.userRelays.findFirst({
 		where: and(eq(userRelays.id, req.id), eq(userRelays.userId, ctx.userId)),
 	});
 	if (!row) {
 		throw new ServiceException("not_found", "Relay not found");
 	}
-	const key = row.apiKey || "";
+	const key = await decryptCredential(row.apiKey || "", credentialsSecret);
+	if (key && !row.apiKey.startsWith("enc:v1:")) {
+		await db
+			.update(userRelays)
+			.set({ apiKey: await encryptCredential(key, credentialsSecret) })
+			.where(eq(userRelays.id, row.id));
+	}
 	return {
 		id: row.id,
 		name: row.name,
@@ -132,7 +149,7 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 };
 
 const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
-	const { db } = getContext();
+	const { db, credentialsSecret } = getContext();
 	const [row] = await db
 		.insert(userRelays)
 		.values({
@@ -140,7 +157,7 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			name: req.name,
 			type: req.type,
 			baseURL: (() => { try { return assertSafePublicUrl(normalizeRelayBaseURL(req.type, req.baseURL)); } catch (e: any) { throw new ServiceException("invalid_parameter", e?.message || "Invalid baseURL"); } })(),
-			apiKey: req.apiKey.trim(),
+			apiKey: await encryptCredential(req.apiKey.trim(), credentialsSecret),
 			models: req.models,
 			apiMode: req.type === "openai" ? req.apiMode || "endpoints" : "auto",
 			endpoints:
@@ -155,7 +172,7 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 };
 
 const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
-	const { db } = getContext();
+	const { db, credentialsSecret } = getContext();
 	const existing = await db.query.userRelays.findFirst({
 		where: and(eq(userRelays.id, req.id), eq(userRelays.userId, ctx.userId)),
 	});
@@ -181,7 +198,7 @@ const updateRelay = async (req: UpdateRelay, ctx: RequestContext) => {
 				  }
 				: {}),
 			...(req.apiKey !== undefined && req.apiKey.trim() && !req.apiKey.includes("****")
-				? { apiKey: req.apiKey.trim() }
+				? { apiKey: await encryptCredential(req.apiKey.trim(), credentialsSecret) }
 				: {}),
 			...(req.models !== undefined ? { models: req.models } : {}),
 			...(req.apiMode !== undefined ? { apiMode: req.apiMode } : {}),
@@ -210,14 +227,14 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 
 	if (type === "openai") {
 		const url = `${baseURL.replace(/\/+$/, "")}/models`;
-		const resp = await fetch(url, {
+		const resp = await fetchPublicUrl(url, {
 			method: "GET",
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 				"Content-Type": "application/json",
 			},
 		});
-		const text = await resp.text();
+		const text = await readResponseText(resp, MAX_PROVIDER_RESPONSE_BYTES);
 		let json: any = null;
 		try {
 			json = JSON.parse(text);
@@ -270,7 +287,7 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 	let lastErr = "unreachable";
 	for (const url of candidates) {
 		try {
-			const resp = await fetch(url, {
+			const resp = await fetchPublicUrl(url, {
 				method: "GET",
 				headers: {
 					"x-goog-api-key": apiKey,
@@ -278,7 +295,7 @@ const probeRelay = async (req: ProbeRelay, _ctx: RequestContext) => {
 					"Content-Type": "application/json",
 				},
 			});
-			const text = await resp.text();
+			const text = await readResponseText(resp, MAX_PROVIDER_RESPONSE_BYTES);
 			let json: any = null;
 			try {
 				json = JSON.parse(text);
@@ -383,19 +400,26 @@ const resolveRelayForGeneration = async (providerId: string, ctx: RequestContext
 		return null;
 	}
 	const relayId = providerId.slice("relay:".length);
-	const { db } = getContext();
+	const { db, credentialsSecret } = getContext();
 	const row = await db.query.userRelays.findFirst({
 		where: and(eq(userRelays.id, relayId), eq(userRelays.userId, ctx.userId), eq(userRelays.enabled, true)),
 	});
 	if (!row) {
 		throw new ServiceException("not_found", "Relay station not found or disabled");
 	}
+	const apiKey = await decryptCredential(row.apiKey, credentialsSecret);
+	if (apiKey && !row.apiKey.startsWith("enc:v1:")) {
+		await db
+			.update(userRelays)
+			.set({ apiKey: await encryptCredential(apiKey, credentialsSecret) })
+			.where(eq(userRelays.id, row.id));
+	}
 	return {
 		id: row.id,
 		name: row.name,
 		type: row.type as "openai" | "google",
 		baseURL: row.baseURL,
-		apiKey: row.apiKey,
+		apiKey,
 		models: (row.models as RelayModel[]) || [],
 		apiMode: ((row as any).apiMode || "endpoints") as "auto" | "images" | "responses" | "endpoints",
 		endpoints: (row as any).endpoints || {

@@ -1,75 +1,69 @@
-import { Hono } from "hono";
+import { account, user } from "@/server/db/schemas";
 import { readWorkerEnv } from "@/server/lib/worker-env";
+import { and, eq, or } from "drizzle-orm";
+import { type Context, Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { type Env, ok } from "../util";
 
-/**
- * Public diagnostics for first-time setup (no secrets returned).
- */
+async function assertSetupAccess(c: Context<Env>) {
+	const firstUser = await c.var.db.query.user.findFirst();
+	if (!firstUser) return { firstSetup: true };
+
+	if (!c.var.user) {
+		throw new HTTPException(401, { message: "Authentication required" });
+	}
+	const currentUser = await c.var.db.query.user.findFirst({
+		where: eq(user.id, c.var.user.id),
+	});
+	if (!currentUser || currentUser.role !== "admin" || currentUser.banned) {
+		throw new HTTPException(403, { message: "Admin access required" });
+	}
+	return { firstSetup: false };
+}
+
 const app = new Hono<Env>()
 	.basePath("/setup")
 	.get("/status", async (c) => {
+		const access = await assertSetupAccess(c);
 		const e = readWorkerEnv(c.env as any);
-		const d1 = c.env.DB;
-		const hasPassword = !!e.ADMIN_PASSWORD;
-		let userCount = 0;
-		let admin: any = null;
-		let error: string | null = null;
-
-		try {
-			if (d1) {
-				const cnt = await d1.prepare(`SELECT COUNT(*) as c FROM user`).first<{ c: number }>();
-				userCount = Number(cnt?.c || 0);
-				admin = await d1
-					.prepare(
-						`SELECT id, username, role,
-              (SELECT COUNT(*) FROM account a WHERE a.user_id = user.id AND a.provider_id = 'credential' AND a.password IS NOT NULL) as has_password
-             FROM user
-             WHERE username = 'admin' OR role = 'admin'
-             LIMIT 1`,
-					)
-					.first();
-			}
-		} catch (err: any) {
-			error = err?.message || String(err);
-		}
+		const userCount = (await c.var.db.query.user.findMany()).length;
+		const admin = await c.var.db.query.user.findFirst({
+			where: or(eq(user.username, "admin"), eq(user.role, "admin")),
+		});
+		const credential = admin
+			? await c.var.db.query.account.findFirst({
+					where: and(eq(account.userId, admin.id), eq(account.providerId, "credential")),
+				})
+			: null;
 
 		return c.json(
 			ok({
-				hasAdminPasswordEnv: hasPassword,
+				firstSetup: access.firstSetup,
+				hasAdminPasswordEnv: !!e.ADMIN_PASSWORD,
 				userCount,
 				admin: admin
 					? {
-							id: admin.id,
 							username: admin.username || "admin",
 							role: admin.role,
-							hasPassword: Number(admin.has_password) > 0,
+							hasPassword: !!credential?.password,
 						}
 					: null,
-				loginHint: {
-					username: "admin",
-					passwordSource: "GitHub Secret ADMIN_PASSWORD",
-				},
-				error,
 			}),
 		);
 	})
 	.post("/bootstrap", async (c) => {
+		await assertSetupAccess(c);
 		const e = readWorkerEnv(c.env as any);
-		const { bootstrapAdmin: boot, resetBootstrapFlag } = await import(
-			"@/server/service/admin/bootstrap"
-		);
-		resetBootstrapFlag();
-		await boot(c.var.db, {
+		const { bootstrapAdmin } = await import("@/server/service/admin/bootstrap");
+		await bootstrapAdmin(c.var.db, {
 			ADMIN_PASSWORD: e.ADMIN_PASSWORD,
 			ADMIN_NAME: e.ADMIN_NAME,
 			DB: c.env.DB,
 		});
-		return c.json(
-			ok({
-				ok: true,
-				hasAdminPasswordEnv: !!e.ADMIN_PASSWORD,
-			}),
-		);
+		const admin = await c.var.db.query.user.findFirst({
+			where: or(eq(user.username, "admin"), eq(user.role, "admin")),
+		});
+		return c.json(ok({ initialized: !!admin }));
 	});
 
 export default app;

@@ -1,3 +1,4 @@
+import { MAX_PROVIDER_RESPONSE_BYTES, readResponseText } from "@/server/lib/ssrf";
 import { fetchUrlToDataURI } from "@/server/lib/util";
 import type { TypixGenerateRequest } from "../types/api";
 import type { AiProvider, ApiProviderSettings, ApiProviderSettingsItem } from "../types/provider";
@@ -25,6 +26,7 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 			"Content-Type": "application/json",
 		},
 		body: JSON.stringify(requestBody),
+		signal: AbortSignal.timeout(30_000),
 	});
 
 	if (!submitResponse.ok) {
@@ -34,7 +36,9 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 		throw new Error(`Flux API error: ${submitResponse.status} ${submitResponse.statusText}`);
 	}
 
-	const submitData: FluxSubmitResponse = await submitResponse.json();
+	const submitData = JSON.parse(
+		await readResponseText(submitResponse, MAX_PROVIDER_RESPONSE_BYTES),
+	) as FluxSubmitResponse;
 	const { id: requestId, polling_url: pollingUrl } = submitData;
 
 	let attempts = 0;
@@ -45,6 +49,9 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 		attempts++;
 
 		const pollUrl = new URL(pollingUrl);
+		if (pollUrl.protocol !== "https:" || pollUrl.hostname !== "api.bfl.ai") {
+			throw new Error("Flux returned an unsafe polling URL");
+		}
 		pollUrl.searchParams.set("id", requestId);
 
 		const pollResponse = await fetch(pollUrl.toString(), {
@@ -53,13 +60,14 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 				accept: "application/json",
 				"x-key": apiKey,
 			},
+			signal: AbortSignal.timeout(15_000),
 		});
 
 		if (!pollResponse.ok) {
 			throw new Error(`Flux polling error: ${pollResponse.status} ${pollResponse.statusText}`);
 		}
 
-		const pollData: FluxPollResponse = await pollResponse.json();
+		const pollData = JSON.parse(await readResponseText(pollResponse, MAX_PROVIDER_RESPONSE_BYTES)) as FluxPollResponse;
 
 		if (pollData.status === "Ready" && pollData.result?.sample) {
 			try {

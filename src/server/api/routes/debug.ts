@@ -1,5 +1,6 @@
 import { generateViaRelay } from "@/server/ai/provider/relay";
 import { extractImagesFromAny } from "@/server/lib/image-parse";
+import { decryptCredential } from "@/server/lib/credentials";
 import { readWorkerEnv } from "@/server/lib/worker-env";
 import { getContext } from "@/server/service/context";
 import { purgeExpiredR2Objects, resolveRetentionDays } from "@/server/service/file/retention";
@@ -177,6 +178,7 @@ const app = new Hono<Env>()
 			where: eq(userRelays.id, relayId),
 		});
 		if (!row) return c.json({ code: "not_found", message: "relay not found" }, 404);
+		const apiKey = await decryptCredential(row.apiKey, getContext().credentialsSecret);
 		const modelId = model || ((row.models as any[])?.[0]?.id as string) || "";
 		if (!modelId) return c.json({ code: "error", message: "model required" }, 400);
 		const result = await generateViaRelay(
@@ -189,7 +191,7 @@ const app = new Hono<Env>()
 			{
 				type: row.type as any,
 				baseURL: row.baseURL,
-				apiKey: row.apiKey,
+				apiKey,
 				modelId,
 				apiMode: (row as any).apiMode || "endpoints",
 				endpoints: (row as any).endpoints || null,
@@ -216,18 +218,18 @@ const app = new Hono<Env>()
 		});
 		return c.json(
 			ok(
-				rows.map((r) => ({
+				await Promise.all(rows.map(async (r) => ({
 					id: r.id,
 					userId: r.userId,
 					name: r.name,
 					type: r.type,
 					baseURL: r.baseURL,
-					apiKey: mask(r.apiKey),
+					apiKey: mask(await decryptCredential(r.apiKey, getContext().credentialsSecret)),
 					apiMode: r.apiMode,
 					endpoints: r.endpoints,
 					enabled: r.enabled,
 					models: r.models,
-				})),
+				}))),
 			),
 		);
 	})

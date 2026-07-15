@@ -1,4 +1,10 @@
 import { inCfWorker } from "@/server/lib/env";
+import {
+	MAX_PROVIDER_RESPONSE_BYTES,
+	MAX_REMOTE_IMAGE_BYTES,
+	readResponseBytes,
+	readResponseText,
+} from "@/server/lib/ssrf";
 import { GenError, type ReplacePropertyType } from "@/server/lib/types";
 import { base64ToBlob, base64ToDataURI, dataURItoBase64, readableStreamToDataURI } from "@/server/lib/util";
 import { getContext } from "@/server/service/context";
@@ -38,7 +44,7 @@ const createFormData = (params: any, model: CloudflareAiModel, request: TypixGen
 // Helper function to handle API response
 const handleApiResponse = async (resp: Response): Promise<string[]> => {
 	if (!resp.ok) {
-		const errorText = await resp.text();
+		const errorText = await readResponseText(resp, MAX_PROVIDER_RESPONSE_BYTES);
 		if (resp.status === 401 || resp.status === 404) {
 			throw new GenError("CONFIG_ERROR");
 		}
@@ -64,11 +70,11 @@ const handleApiResponse = async (resp: Response): Promise<string[]> => {
 
 	const contentType = resp.headers.get("Content-Type");
 	if (contentType?.includes("image/png") === true) {
-		const imageBuffer = await resp.arrayBuffer();
+		const imageBuffer = await readResponseBytes(resp, MAX_REMOTE_IMAGE_BYTES);
 		return [base64ToDataURI(Buffer.from(imageBuffer).toString("base64"))];
 	}
 
-	const result = (await resp.json()) as unknown as any;
+	const result = JSON.parse(await readResponseText(resp, MAX_PROVIDER_RESPONSE_BYTES)) as any;
 	return [base64ToDataURI(result.result.image)];
 };
 
@@ -132,6 +138,7 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 			method: "POST",
 			headers,
 			body: createFormData(params, model, request),
+			signal: AbortSignal.timeout(30_000),
 		});
 		return handleApiResponse(resp);
 	}
@@ -141,6 +148,7 @@ const generateSingle = async (request: TypixGenerateRequest, settings: ApiProvid
 		method: "POST",
 		headers,
 		body: JSON.stringify(params),
+		signal: AbortSignal.timeout(30_000),
 	});
 	return handleApiResponse(resp);
 };

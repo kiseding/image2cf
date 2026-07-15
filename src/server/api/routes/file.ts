@@ -66,9 +66,8 @@ const app = new Hono<Env>()
 				contentType = obj.httpMetadata?.contentType || "image/png";
 				c.header("Content-Type", contentType);
 				c.header("Cache-Control", "private, max-age=31536000");
-				const buf = new Uint8Array(await obj.arrayBuffer());
 				return stream(c, async (stream) => {
-					await stream.write(buf);
+					await stream.pipe(obj.body);
 				});
 			}
 			case "file:": {

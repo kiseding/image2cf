@@ -1,3 +1,4 @@
+import { assertSafePublicUrl, fetchPublicUrl } from "@/server/lib/ssrf";
 import { base64ToDataURI, fetchUrlToDataURI } from "@/server/lib/util";
 import openai from "openai";
 import type { AiProvider, ApiProviderSettings, ApiProviderSettingsItem } from "../types/provider";
@@ -78,13 +79,23 @@ const OpenAI: AiProvider = {
 			supportedAspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4"],
 		},
 	],
-	parseSettings: <OpenAISettings>(settings: ApiProviderSettings) => {
-		return doParseSettings(settings, openAISettingsSchema) as OpenAISettings;
+	parseSettings: <T>(settings: ApiProviderSettings) => {
+		const parsed = doParseSettings(settings, openAISettingsSchema) as OpenAISettings;
+		parsed.baseURL = assertSafePublicUrl(parsed.baseURL!);
+		return parsed as T;
 	},
 	generate: async (request, settings) => {
 		const { baseURL, apiKey, model } = OpenAI.parseSettings<OpenAISettings>(settings);
 
-		const client = new openai.OpenAI({ baseURL, apiKey, dangerouslyAllowBrowser: true });
+		const client = new openai.OpenAI({
+			baseURL,
+			apiKey,
+			dangerouslyAllowBrowser: true,
+			fetch: async (input, init) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+				return await fetchPublicUrl(url, init, { timeoutMs: 6 * 60_000 });
+			},
+		});
 
 		let generateResult: openai.ImagesResponse;
 		let size: any = null;

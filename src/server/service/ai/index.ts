@@ -2,11 +2,14 @@ import { AI_PROVIDERS, getProviderById } from "@/server/ai/provider";
 import type { ApiProviderSettings } from "@/server/ai/types/provider";
 import { getProviderSettingsSchema } from "@/server/ai/types/provider";
 import { aiModels, aiProviders } from "@/server/db/schemas";
+import { decryptCredential, encryptCredential } from "@/server/lib/credentials";
 import { ServiceException } from "@/server/lib/exception";
 import { and, eq, inArray } from "drizzle-orm";
 import { createInsertSchema, createUpdateSchema } from "drizzle-zod";
 import z from "zod/v4";
 import { type RequestContext, getContext } from "../context";
+
+const SECRET_MASK = "********";
 
 const getAiProviders = async (ctx: RequestContext) => {
 	const { db } = getContext();
@@ -84,8 +87,8 @@ export const GetAiProviderByIdSchema = z.object({
 	providerId: z.string(),
 });
 export type GetAiProviderById = z.infer<typeof GetAiProviderByIdSchema>;
-const getAiProviderById = async (req: GetAiProviderById, ctx: RequestContext) => {
-	const { db } = getContext();
+const buildAiProviderById = async (req: GetAiProviderById, ctx: RequestContext, maskSecrets: boolean) => {
+	const { db, credentialsSecret } = getContext();
 	const { userId } = ctx;
 
 	const providerInstance = getProviderById(req.providerId);
@@ -96,18 +99,33 @@ const getAiProviderById = async (req: GetAiProviderById, ctx: RequestContext) =>
 	});
 
 	// Merge user provider with system provider
-	const userProviderSettings = userProvider?.settings as ApiProviderSettings | undefined;
+	const userProviderSettings = { ...((userProvider?.settings as ApiProviderSettings | undefined) ?? {}) };
 
 	// Get settings schema (handle both direct array and function)
 	const settingsSchema = getProviderSettingsSchema(providerInstance);
 
-	const settings = settingsSchema?.map((setting) => {
-		const value = userProviderSettings?.[setting.key] ?? setting.defaultValue;
+	let needsCredentialMigration = false;
+	const settings = await Promise.all((settingsSchema ?? []).map(async (setting) => {
+		let value = userProviderSettings[setting.key] ?? setting.defaultValue;
+		if (setting.type === "password" && typeof value === "string") {
+			if (value && !value.startsWith("enc:v1:")) needsCredentialMigration = true;
+			value = await decryptCredential(value, credentialsSecret);
+		}
 		return {
 			...setting,
-			value,
+			value: maskSecrets && setting.type === "password" && value ? SECRET_MASK : value,
 		};
-	});
+	}));
+	if (userProvider && needsCredentialMigration) {
+		const encryptedSettings = { ...userProviderSettings };
+		for (const setting of settingsSchema ?? []) {
+			const value = encryptedSettings[setting.key];
+			if (setting.type === "password" && typeof value === "string" && value) {
+				encryptedSettings[setting.key] = await encryptCredential(value, credentialsSecret);
+			}
+		}
+		await db.update(aiProviders).set({ settings: encryptedSettings }).where(eq(aiProviders.id, userProvider.id));
+	}
 	const provider = {
 		...providerInstance,
 		settings: settings,
@@ -117,6 +135,14 @@ const getAiProviderById = async (req: GetAiProviderById, ctx: RequestContext) =>
 	return provider;
 };
 
+const getAiProviderById = async (req: GetAiProviderById, ctx: RequestContext) => {
+	return await buildAiProviderById(req, ctx, true);
+};
+
+export const getAiProviderByIdWithSecrets = async (req: GetAiProviderById, ctx: RequestContext) => {
+	return await buildAiProviderById(req, ctx, false);
+};
+
 export const UpdateAiProviderSchema = createUpdateSchema(aiProviders).pick({
 	providerId: true,
 	enabled: true,
@@ -124,7 +150,7 @@ export const UpdateAiProviderSchema = createUpdateSchema(aiProviders).pick({
 });
 export type UpdateAiProvider = z.infer<typeof UpdateAiProviderSchema>;
 const updateAiProvider = async (req: UpdateAiProvider, ctx: RequestContext) => {
-	const { db } = getContext();
+	const { db, credentialsSecret } = getContext();
 	const { userId } = ctx;
 
 	if (!req.providerId) {
@@ -133,21 +159,41 @@ const updateAiProvider = async (req: UpdateAiProvider, ctx: RequestContext) => {
 
 	const providerInstance = getProviderById(req.providerId);
 
-	// Validate settings
-	if (req.settings) {
-		providerInstance.parseSettings(req.settings);
-	}
-
 	// insert or update in database
 	const existingProvider = await db.query.aiProviders.findFirst({
 		where: and(eq(aiProviders.providerId, req.providerId), eq(aiProviders.userId, userId)),
 	});
+	const settingsSchema = getProviderSettingsSchema(providerInstance) ?? [];
+	const oldSettings = (existingProvider?.settings as ApiProviderSettings | null) ?? {};
+	const submittedSettings = (req.settings as ApiProviderSettings | undefined) ?? undefined;
+	let mergedSettings: ApiProviderSettings | undefined;
+	if (submittedSettings) {
+		mergedSettings = { ...oldSettings };
+		for (const [key, value] of Object.entries(submittedSettings)) {
+			const isSecret = settingsSchema.some((setting) => setting.key === key && setting.type === "password");
+			if (isSecret && (value === "" || value === SECRET_MASK)) continue;
+			mergedSettings[key] = isSecret && typeof value === "string"
+				? await encryptCredential(value, credentialsSecret)
+				: value;
+		}
+	}
+
+	if (mergedSettings) {
+		const validationSettings = { ...mergedSettings };
+		for (const setting of settingsSchema) {
+			const value = validationSettings[setting.key];
+			if (setting.type === "password" && typeof value === "string") {
+				validationSettings[setting.key] = await decryptCredential(value, credentialsSecret);
+			}
+		}
+		providerInstance.parseSettings(validationSettings);
+	}
 	if (!existingProvider) {
 		// Insert new provider
 		await db.insert(aiProviders).values({
 			providerId: providerInstance.id,
 			userId: userId,
-			settings: req.settings,
+			settings: mergedSettings,
 		});
 		return;
 	}
@@ -157,7 +203,7 @@ const updateAiProvider = async (req: UpdateAiProvider, ctx: RequestContext) => {
 		.update(aiProviders)
 		.set({
 			enabled: req.enabled,
-			settings: req.settings,
+			settings: mergedSettings,
 		})
 		.where(eq(aiProviders.id, existingProvider.id));
 

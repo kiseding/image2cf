@@ -75,6 +75,14 @@ jobs:
             cat /tmp/r2-create.log
           fi
 
+      - name: Ensure generation queues exist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          pnpm exec wrangler queues create image2cf-generation || true
+          pnpm exec wrangler queues create image2cf-generation-dlq || true
+
       - name: Build
         run: pnpm build
         env:
@@ -108,27 +116,12 @@ jobs:
           printf '%s' "$ADMIN_PASSWORD" | pnpm exec wrangler secret put ADMIN_PASSWORD
           echo "ADMIN_PASSWORD synced to Worker"
 
-      - name: Bootstrap admin account
+      - name: Sync credential encryption secret
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          WORKER_URL: ${{ secrets.WORKER_URL }}
+          CREDENTIALS_SECRET: ${{ secrets.CREDENTIALS_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: |
-          # Prefer explicit WORKER_URL secret; fallback to workers.dev name from wrangler.toml
-          URL="${WORKER_URL:-}"
-          if [ -z "$URL" ]; then
-            NAME=$(node -e "const t=require('fs').readFileSync('wrangler.toml','utf8'); const m=t.match(/^name\\s*=\\s*\"([^\"]+)\"/m); console.log(m?m[1]:'image2cf')")
-            URL="https://${NAME}.kiseding.workers.dev"
-          fi
-          echo "Bootstrapping via $URL/api/setup/bootstrap"
-          # retry a few times (secret propagation / cold start)
-          for i in 1 2 3 4 5; do
-            CODE=$(curl -sS -o /tmp/boot.json -w "%{http_code}" -X POST "$URL/api/setup/bootstrap" || true)
-            echo "attempt $i http=$CODE body=$(cat /tmp/boot.json 2>/dev/null || true)"
-            if [ "$CODE" = "200" ]; then
-              curl -sS "$URL/api/setup/status" || true
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "Bootstrap request failed (deploy still succeeded). Open the site once or POST /api/setup/bootstrap manually."
+          SECRET="${CREDENTIALS_SECRET:-$ADMIN_PASSWORD}"
+          printf '%s' "$SECRET" | pnpm exec wrangler secret put CREDENTIALS_SECRET

@@ -20,6 +20,7 @@ export function readWorkerEnv(env: Record<string, any> | undefined | null) {
 		ADMIN_PASSWORD: get("ADMIN_PASSWORD"),
 		ADMIN_NAME: get("ADMIN_NAME"),
 		BETTER_AUTH_SECRET: get("BETTER_AUTH_SECRET"),
+		CREDENTIALS_SECRET: get("CREDENTIALS_SECRET"),
 		MODE: get("MODE"),
 		PROVIDER_CLOUDFLARE_BUILTIN: get("PROVIDER_CLOUDFLARE_BUILTIN"),
 		AUTH_EMAIL_VERIFICATION_ENABLED: get("AUTH_EMAIL_VERIFICATION_ENABLED"),
@@ -40,5 +41,6 @@ export function readWorkerEnv(env: Record<string, any> | undefined | null) {
 		DB: e.DB as D1Database | undefined,
 		AI: e.AI as Ai | undefined,
 		R2: e.R2 as R2Bucket | undefined,
+		GENERATION_QUEUE: e.GENERATION_QUEUE as Queue | undefined,
 	};
 }

@@ -75,6 +75,7 @@ export const messageGenerations = sqliteTable("message_generations", {
 	status: text({
 		enum: ["pending", "generating", "completed", "failed"],
 	}).default("pending"),
+	attempt: integer({ mode: "number" }).default(0).notNull(),
 	fileIds: text({ mode: "json" }), // Array of file IDs if applicable
 	errorReason: text({ enum: errorReason }), // Reason for failure if status is "failed"
 	generationTime: integer({ mode: "number" }), // Time taken in milliseconds

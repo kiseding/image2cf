@@ -34,13 +34,13 @@ Forked from [typix-image](https://github.com/kiseding/typix-image).
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ |
 | `CLOUDFLARE_D1_DATABASE_ID` | ✅ |
 | `ADMIN_PASSWORD` | ✅ |
-| `WORKER_URL` | Recommended |
 | `CLOUDFLARE_R2_BUCKET_NAME` | Optional (default `image2cf`) |
+| `CREDENTIALS_SECRET` | Recommended; stable credential-encryption key |
 
 Push to `main` or run **Deploy Cloudflare Workers** workflow.
 
 Login: `admin` + `ADMIN_PASSWORD`.  
-Check: `GET /api/setup/status`, `POST /api/setup/bootstrap`.
+The admin is created only when absent; deployment never overwrites an existing password. Setup endpoints become admin-only after the first user exists.
 
 ### Important Worker vars
 
@@ -50,6 +50,7 @@ Check: `GET /api/setup/status`, `POST /api/setup/bootstrap`.
 | `R2_RETENTION_DAYS` | `30` | Object lifetime |
 | `DEBUG` | off | Debug API |
 | `MODE` | `mixed` | Login required |
+| `CREDENTIALS_SECRET` | fallback secret | AES-GCM key for relay/provider credentials; do not rotate without migration |
 
 ---
 
@@ -79,6 +80,8 @@ curl -sS -X POST "https://YOUR_HOST/api/debug/generations/fail-stale?maxAgeSec=1
 
 Turn `DEBUG` off in production when done.
 
+Generation runs through Cloudflare Queues. D1 compare-and-set claims and attempt versions prevent duplicate execution and stale result overwrites. A cron marks jobs still active after 15 minutes as `TIMEOUT`.
+
 ---
 
 ## Local
@@ -98,7 +101,7 @@ pnpm db:push && pnpm dev
 | Stuck “generating” | Deploy latest; `fail-stale`; check relay returns `url`/`b64_json` |
 | Relay OK, app empty | Parse fields; prefer URL responses |
 | 410 on image | R2 object expired (`R2_RETENTION_DAYS`) |
-| Login fails | Secret + bootstrap |
+| Login fails | Check `ADMIN_PASSWORD`; bootstrap never resets an existing password |
 
 ---
 

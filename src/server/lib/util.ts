@@ -1,3 +1,5 @@
+import { MAX_REMOTE_IMAGE_BYTES, fetchPublicUrl, readResponseBytes } from "./ssrf";
+
 export function base64ToDataURI(base64: string, fmt = "png") {
 	return `data:image/${fmt};base64,${base64}`;
 }
@@ -44,15 +46,15 @@ export async function readableStreamToDataURI(stream: ReadableStream<Uint8Array>
 }
 
 export async function fetchUrlToDataURI(url: string) {
-	const resp = await fetch(url);
+	const resp = await fetchPublicUrl(url);
 	if (!resp.ok) {
-		throw new Error(`Failed to fetch URL: ${url}, status: ${resp.status}`);
+		throw new Error(`Failed to fetch remote image, status: ${resp.status}`);
 	}
-
-	const arrayBuffer = await resp.arrayBuffer();
+	const contentType = (resp.headers.get("content-type") || "").split(";")[0]!.toLowerCase();
+	if (!contentType.startsWith("image/")) throw new Error("Remote URL did not return an image");
+	const uint8Array = await readResponseBytes(resp, MAX_REMOTE_IMAGE_BYTES);
 	// Convert ArrayBuffer to base64 using browser-compatible method
-	const uint8Array = new Uint8Array(arrayBuffer);
 	const binaryString = Array.from(uint8Array, (byte) => String.fromCharCode(byte)).join("");
 	const base64 = btoa(binaryString);
-	return base64ToDataURI(base64);
+	return `data:${contentType};base64,${base64}`;
 }
