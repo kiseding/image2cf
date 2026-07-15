@@ -311,13 +311,12 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 					setCurrentChatId(result.id);
 					setIsChatIdValidated(true);
 
-					// Server starts via waitUntil; client also kicks once (CAS skips if already running).
+					// Trigger image generation if messages were created (971eb01 pattern)
 					if (result.messages) {
 						const assistantMessage = result.messages.find((msg: any) => msg.role === "assistant");
-						const gid = assistantMessage?.generation?.id || (result as any).generationId;
-						if (gid) {
-							if (assistantMessage?.generation) assistantMessage.generation.status = "generating";
-							void chatService.createMessageGenerate({ generationId: gid }).catch((error) => {
+						if (assistantMessage?.generation?.id) {
+							assistantMessage.generation.status = "generating";
+							chatService.createMessageGenerate({ generationId: assistantMessage.generation.id }).catch((error) => {
 								console.error("Error triggering image generation:", error);
 							});
 						}
@@ -469,11 +468,11 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 						};
 					}, false);
 
-					// Server + client dual-start (idempotent CAS). Poll updates UI.
 					if (shouldTriggerGeneration) {
-						void chatService
-							.createMessageGenerate({ generationId: assistantMessage!.generation!.id })
-							.catch((error) => console.error("Error triggering image generation:", error));
+						// Fire and forget - client-triggered generation (971eb01 working pattern)
+						chatService.createMessageGenerate({ generationId: assistantMessage!.generation!.id }).catch((error) => {
+							console.error("Error triggering image generation:", error);
+						});
 					}
 				} else {
 					// Fallback: revalidate if no messages returned
@@ -600,11 +599,10 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 				}, false);
 
 				const result = await chatService.regenerateMessage({ messageId });
-				// Dual-start fallback (CAS skips if server already claimed)
 				if (result?.generationId) {
-					void chatService
-						.createMessageGenerate({ generationId: result.generationId })
-						.catch((error) => console.error("Error triggering image regeneration:", error));
+					chatService.createMessageGenerate({ generationId: result.generationId }).catch((error) => {
+						console.error("Error triggering image generation:", error);
+					});
 				}
 			} catch (error) {
 				console.error("Failed to regenerate message:", error);

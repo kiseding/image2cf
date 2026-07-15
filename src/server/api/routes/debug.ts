@@ -179,7 +179,6 @@ const app = new Hono<Env>()
 		if (!row) return c.json({ code: "not_found", message: "relay not found" }, 404);
 		const modelId = model || ((row.models as any[])?.[0]?.id as string) || "";
 		if (!modelId) return c.json({ code: "error", message: "model required" }, 400);
-		const metas: any[] = [];
 		const result = await generateViaRelay(
 			{
 				providerId: `relay:${relayId}`,
@@ -195,9 +194,6 @@ const app = new Hono<Env>()
 				apiMode: (row as any).apiMode || "endpoints",
 				endpoints: (row as any).endpoints || null,
 			},
-			{
-				onMeta: (m) => metas.push(m),
-			},
 		);
 		return c.json(
 			ok({
@@ -208,7 +204,6 @@ const app = new Hono<Env>()
 						? { kind: "data-uri", length: img.length }
 						: { kind: "url", value: img.slice(0, 120) },
 				),
-				metas,
 			}),
 		);
 	})

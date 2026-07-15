@@ -5,7 +5,7 @@ import { chats, messageAttachments, messageGenerations, messages } from "@/serve
 import { createSchemaOmits } from "@/server/db/util";
 import { inBrowser, inCfWorker } from "@/server/lib/env";
 import { ServiceException } from "@/server/lib/exception";
-import { and, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or } from "drizzle-orm";
 import { createInsertSchema, createUpdateSchema } from "drizzle-zod";
 import z from "zod/v4";
 import { aiService } from "../ai";
@@ -440,9 +440,7 @@ export const CreateMessageSchema = createInsertSchema(messages)
 		images: z.array(z.string()).optional(),
 	});
 export type CreateMessage = z.infer<typeof CreateMessageSchema>;
-type CreateMessageResponse = Pick<NonNullable<Awaited<ReturnType<typeof getChatById>>>, "messages"> & {
-	generationId?: string;
-};
+type CreateMessageResponse = Pick<NonNullable<Awaited<ReturnType<typeof getChatById>>>, "messages">;
 
 // Common image generation logic
 interface GenerationParams {
@@ -458,49 +456,6 @@ interface GenerationParams {
 	height?: number;
 	aspectRatio?: string;
 	messageId?: string; // For regeneration, exclude this message from reference search
-}
-
-type ProgressPhase =
-	| "queued"
-	| "preparing"
-	| "calling_api"
-	| "parsing"
-	| "saving"
-	| "completed"
-	| "failed";
-
-async function setGenerationProgress(
-	generationId: string,
-	phase: ProgressPhase,
-	percent: number,
-	extra?: Record<string, unknown>,
-	opts?: { touchRow?: boolean },
-) {
-	const { db } = getContext();
-	const row = await db.query.messageGenerations.findFirst({
-		where: eq(messageGenerations.id, generationId),
-		columns: { parameters: true, status: true },
-	});
-	if (!row || row.status === "completed" || row.status === "failed") return;
-	const prev = (row.parameters as any) || {};
-	const startedAt = prev.progress?.startedAt || new Date().toISOString();
-	// Soft progress must NOT bump row.updatedAt — that blocked stale reclaim forever
-	const patch: Record<string, unknown> = {
-		parameters: {
-			...prev,
-			progress: {
-				phase,
-				percent: Math.max(0, Math.min(100, Math.round(percent))),
-				startedAt,
-				updatedAt: new Date().toISOString(),
-				...extra,
-			},
-		} as any,
-	};
-	if (opts?.touchRow !== false && phase !== "calling_api") {
-		patch.updatedAt = new Date().toISOString();
-	}
-	await db.update(messageGenerations).set(patch as any).where(eq(messageGenerations.id, generationId));
 }
 
 const executeImageGeneration = async (params: GenerationParams, ctx: RequestContext) => {
@@ -521,8 +476,6 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 	} = params;
 
 	try {
-		await setGenerationProgress(generationId, "preparing", 12, { message: "preparing_request" });
-
 		const isRelay = providerId.startsWith("relay:");
 		let modelAbility: "t2i" | "i2i" = "t2i";
 		let maxInputImages = 1;
@@ -530,7 +483,7 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 		if (isRelay) {
 			const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
 			const model = relay?.models.find((m) => m.id === modelId);
-			// Only use images when the user explicitly attached them (no silent last-image i2i)
+			// Only i2i when user attached images (971 used i2i default; keep explicit)
 			modelAbility = userImages && userImages.length > 0 ? "i2i" : "t2i";
 			maxInputImages = model?.maxInputImages || 4;
 		} else {
@@ -598,220 +551,83 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			height,
 		};
 
-		// NO soft-progress D1 ticks (rate-limit killed completed writes).
-		// Phase writes only: preparing → calling_api → parsing → saving → done.
-		const wallStart = Date.now();
-		const WALL_MS = 360_000; // 6 minutes hard cap
-		let lastMeta: any = null;
-		const abortCtrl = new AbortController();
-		await setGenerationProgress(
-			generationId,
-			"calling_api",
-			30,
-			{
-				message: referImages?.length ? "calling_i2i" : "calling_t2i",
-				hasReference: !!referImages?.length,
-			},
-			{ touchRow: true },
-		);
-
 		let result;
-		try {
-			const wallTimer = setTimeout(() => abortCtrl.abort(), WALL_MS);
-			try {
-				if (isRelay) {
-					const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
-					result = await generateViaRelay(
-						generateRequest,
-						{
-							type: relay!.type,
-							baseURL: relay!.baseURL,
-							apiKey: relay!.apiKey,
-							modelId,
-							apiMode: relay!.apiMode || "endpoints",
-							endpoints: relay!.endpoints || null,
-						},
-						{
-							signal: abortCtrl.signal,
-							onMeta: (m) => {
-								lastMeta = m;
-							},
-						},
-					);
-				} else {
-					const providerInstance = getProviderById(providerId);
-					const provider = await aiService.getAiProviderById({ providerId }, ctx);
-					const settings =
-						provider?.settings?.reduce((acc, setting) => {
-							const value = setting.value ?? setting.defaultValue;
-							if (value !== undefined) {
-								acc[setting.key] = value;
-							}
-							return acc;
-						}, {} as ApiProviderSettings) ?? {};
-					result = await providerInstance.generate(generateRequest, settings);
-				}
-			} finally {
-				clearTimeout(wallTimer);
-			}
-			console.log(
-				"[generate] upstream done",
-				generationId,
-				"ms",
-				Date.now() - wallStart,
-				"images",
-				result?.images?.length,
-				"meta",
-				JSON.stringify(lastMeta || {}).slice(0, 300),
-			);
-		} catch (upErr: any) {
-			const isTimeout = upErr?.name === "AbortError" || /timeout|aborted/i.test(String(upErr?.message || upErr));
-			console.error("[generate] upstream failed", generationId, upErr, lastMeta);
-			await setGenerationProgress(generationId, "failed", 100, {
-				message: isTimeout ? "upstream_timeout" : String(upErr?.message || upErr).slice(0, 120),
-				meta: lastMeta || undefined,
+		if (isRelay) {
+			const relay = await relayService.resolveRelayForGeneration(providerId, ctx);
+			result = await generateViaRelay(generateRequest, {
+				type: relay!.type,
+				baseURL: relay!.baseURL,
+				apiKey: relay!.apiKey,
+				modelId,
+				apiMode: relay!.apiMode || "endpoints",
+				endpoints: relay!.endpoints || null,
 			});
-			await db
-				.update(messageGenerations)
-				.set({
-					status: "failed",
-					errorReason: isTimeout ? "TIMEOUT" : "API_ERROR",
-					updatedAt: new Date().toISOString(),
-				})
-				.where(eq(messageGenerations.id, generationId));
-			return;
+		} else {
+			const providerInstance = getProviderById(providerId);
+			const provider = await aiService.getAiProviderById({ providerId }, ctx);
+			const settings =
+				provider?.settings?.reduce((acc, setting) => {
+					const value = setting.value ?? setting.defaultValue;
+					if (value !== undefined) {
+						acc[setting.key] = value;
+					}
+					return acc;
+				}, {} as ApiProviderSettings) ?? {};
+			result = await providerInstance.generate(generateRequest, settings);
 		}
-
-		// Save relay meta into parameters for post-mortem (single write, no per-tick D1 spam)
-		try {
-			const cur = await db.query.messageGenerations.findFirst({
-				where: eq(messageGenerations.id, generationId),
-				columns: { parameters: true },
-			});
-			const pp = (cur?.parameters as any) || {};
-			await db
-				.update(messageGenerations)
-				.set({
-					parameters: { ...pp, relayMeta: lastMeta, upstreamDoneAt: new Date().toISOString() },
-					updatedAt: new Date().toISOString(),
-				})
-				.where(eq(messageGenerations.id, generationId));
-		} catch {
-			/* non-fatal */
-		}
-
-		await setGenerationProgress(generationId, "parsing", 85, {
-			message: "parsing_response",
-			meta: lastMeta || undefined,
-		});
-
 		if (result.errorReason) {
-			await setGenerationProgress(generationId, "failed", 100, {
-				message: result.errorReason,
-				meta: lastMeta || undefined,
-			});
 			await db
 				.update(messageGenerations)
 				.set({
 					status: "failed",
 					errorReason: result.errorReason,
-					updatedAt: new Date().toISOString(),
+					updatedAt: now.toISOString(),
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
 		}
 
 		if (!result.images?.length) {
-			console.error("Image generation returned no images", { providerId, modelId, lastMeta });
-			await setGenerationProgress(generationId, "failed", 100, {
-				message: "no_images_parsed",
-				meta: lastMeta || undefined,
-			});
+			console.error("Image generation returned no images", { providerId, modelId });
 			await db
 				.update(messageGenerations)
 				.set({
 					status: "failed",
 					errorReason: "API_ERROR",
-					updatedAt: new Date().toISOString(),
+					updatedAt: now.toISOString(),
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
 		}
 
-		await setGenerationProgress(generationId, "saving", 92, {
-			message: "saving_images",
-			imageCount: result.images.length,
-		});
-
-		let fileIds: string[] = [];
-		try {
-			fileIds = await saveFiles(result.images, userId);
-		} catch (saveErr) {
-			console.error("[generate] saveFiles error", saveErr);
-			const urls = result.images.filter((u) => /^https?:\/\//i.test(u));
-			if (urls.length) {
-				try {
-					fileIds = await saveFiles(urls, userId);
-				} catch (e2) {
-					console.error("[generate] saveFiles fallback failed", e2);
-				}
-			}
-		}
+		// Save generated files to database (URLs preferred over huge base64)
+		const fileIds = await saveFiles(result.images, userId);
 		if (!fileIds.length) {
-			await setGenerationProgress(generationId, "failed", 100, { message: "save_failed" });
 			await db
 				.update(messageGenerations)
 				.set({
 					status: "failed",
 					errorReason: "API_ERROR",
-					updatedAt: new Date().toISOString(),
+					updatedAt: now.toISOString(),
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
 		}
 
-		// CRITICAL: completed write with retry — if this fails, UI is stuck forever
-		const completedAt = new Date().toISOString();
-		const completedPatch = {
-			status: "completed" as const,
-			fileIds: [...fileIds],
-			generationTime: Date.now() - now.getTime(),
-			parameters: {
-				relayMeta: lastMeta,
-				progress: {
-					phase: "completed",
-					percent: 100,
-					updatedAt: completedAt,
-					message: "done",
-					saved: fileIds.length,
-				},
-			} as any,
-			updatedAt: completedAt,
-		};
-
-		let completed = false;
-		for (let attempt = 0; attempt < 3 && !completed; attempt++) {
-			try {
-				await db
-					.update(messageGenerations)
-					.set(completedPatch)
-					.where(eq(messageGenerations.id, generationId));
-				completed = true;
-			} catch (e) {
-				console.error(`[generate] completed write attempt ${attempt + 1} failed`, e);
-				if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-			}
-		}
-		if (!completed) {
-			console.error("[generate] FATAL: could not write completed status after 3 attempts", generationId);
-		}
-		console.log("[generate] completed", generationId, "files", fileIds.length, "attempts", completed ? 1 : "FAILED");
+		await db
+			.update(messageGenerations)
+			.set({
+				status: "completed",
+				fileIds,
+				generationTime: Date.now() - now.getTime(),
+				updatedAt: now.toISOString(),
+			})
+			.where(eq(messageGenerations.id, generationId));
 	} catch (error) {
 		console.error("Error generating image:", error);
 		const msg = error instanceof Error ? error.message : String(error);
 		const isSize =
 			/too large|too big|SQLITE_TOOBIG|max length|string or blob too big/i.test(msg);
-		await setGenerationProgress(generationId, "failed", 100, { message: msg.slice(0, 120) });
 		await db
 			.update(messageGenerations)
 			.set({
@@ -928,40 +744,21 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 		throw new ServiceException("error", "Failed to create assistant message");
 	}
 
-	// Start generation. Prefer waitUntil so HTTP returns fast; always ensure a start path.
-	// CAS in createMessageGenerate prevents double-run if client also triggers.
-	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
-	if (generation) {
-		const start = createMessageGenerate({ generationId: generation.id }, { ...ctx, blockGenerate: true } as any).catch(
-			(e) => console.error("auto createMessageGenerate failed", e),
-		);
-		if (exec?.waitUntil) {
-			exec.waitUntil(start);
-		} else {
-			// No CF executionCtx (or miswired) — still start; may be cut short on Workers without waitUntil
-			console.warn("[generate] no executionCtx.waitUntil — starting without background guarantee");
-			void start;
-		}
-	}
+	// Don't execute image generation here - client will call createMessageGenerate
+	// This avoids CF Worker 30-second timeout limitation (971eb01 working pattern)
 
 	return {
 		messages: [
 			{
 				...userMessage,
 				generation: null,
-				// Include attachments for immediate display
 				attachments: attachmentResults,
 			},
-			{
-				...assistantMessage,
-				generation: generation!,
-				attachments: [],
-			},
+			{ ...assistantMessage, generation: generation!, attachments: [] },
 		],
-		// Client can use this to call createMessageGenerate once as fallback (idempotent)
-		generationId: generation?.id,
 	} satisfies CreateMessageResponse;
 };
+
 
 export const GetGenerationStatusSchema = z.object({
 	generationId: z.string(),
@@ -979,51 +776,39 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 		return null;
 	}
 
-	// Read-only status (do not mutate TIMEOUT here — races with in-flight generation)
-	const params = (generation.parameters as any) || {};
-	const progress = params.progress || null;
-	const rawIds = generation.fileIds;
-	const fileIdList: string[] = Array.isArray(rawIds)
-		? (rawIds as string[])
-		: typeof rawIds === "string"
-			? (() => {
-					try {
-						const p = JSON.parse(rawIds);
-						return Array.isArray(p) ? p : [];
-					} catch {
-						return [];
-					}
-				})()
-			: [];
+	// Check if generation is still pending/generating but has exceeded 5 minutes
+	if (generation.status === "pending" || generation.status === "generating") {
+		const lastGenTime = new Date(generation.updatedAt);
+		const now = new Date();
+		const elapsedMinutes = (now.getTime() - lastGenTime.getTime()) / 1000 / 60;
 
-	// PURE READ. Never write TIMEOUT here — that race-killed live jobs waiting on slow relays
-	// while soft-progress heartbeats were silent (D1 rate limit / no ticks).
-	const startedAtIso = progress?.startedAt || generation.createdAt;
-	const ageMs = Date.now() - new Date(startedAtIso).getTime();
-	const stale =
-		(generation.status === "pending" || generation.status === "generating") && ageMs > 420_000;
+		if (elapsedMinutes > 5) {
+			// Mark as failed due to timeout
+			type UpdateGeneration = Pick<typeof generation, "status" | "errorReason" | "updatedAt">;
+			const updateData = {
+				status: "failed",
+				errorReason: "TIMEOUT",
+				updatedAt: now.toISOString(),
+			} as UpdateGeneration;
+			await db.update(messageGenerations).set(updateData).where(eq(messageGenerations.id, req.generationId));
 
-	const resultUrls =
-		fileIdList.length > 0
-			? (
-					await Promise.all(
-						fileIdList.map(async (fileId) => {
-							try {
-								return await getFileUrl(fileId, userId);
-							} catch {
-								return null;
-							}
-						}),
-					)
-				).filter(Boolean)
-			: undefined;
+			return {
+				...generation,
+				...updateData,
+				resultUrls: undefined,
+			};
+		}
+	}
 
 	return {
 		...generation,
-		progress,
-		stale,
-		ageMs,
-		resultUrls: resultUrls?.length ? resultUrls : undefined,
+		resultUrls: generation.fileIds
+			? await Promise.all(
+					(generation.fileIds as string[]).map(async (fileId) => {
+						return await getFileUrl(fileId, userId);
+					}),
+				)
+			: undefined,
 	};
 };
 
@@ -1031,10 +816,11 @@ export const CreateMessageGenerateSchema = z.object({
 	generationId: z.string(),
 });
 export type CreateMessageGenerate = z.infer<typeof CreateMessageGenerateSchema>;
-async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestContext) {
+const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestContext) => {
 	const { db } = getContext();
 	const { userId } = ctx;
 
+	// Find the generation record
 	const generation = await db.query.messageGenerations.findFirst({
 		where: eq(messageGenerations.id, req.generationId),
 	});
@@ -1043,52 +829,24 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 		throw new ServiceException("not_found", "Generation not found");
 	}
 
-	// Idempotent: already done
+	// Idempotent: already finished or in flight
 	if (generation.status === "completed") {
-		return { success: true, skipped: true, reason: "already_completed" as const };
+		return { success: true, skipped: true };
 	}
-	// Already running: never re-call relay. Only past wall (7min) mark TIMEOUT without re-run.
 	if (generation.status === "generating") {
-		const params = (generation.parameters as any) || {};
-		const startedIso = params.progress?.startedAt || generation.createdAt;
-		const age = Date.now() - new Date(startedIso).getTime();
-		if (age < 420_000) {
-			return { success: true, skipped: true, reason: "already_generating" as const };
-		}
-		console.warn("[generate] beyond wall — TIMEOUT without re-run", generation.id, "ageMs", age);
-		await db
-			.update(messageGenerations)
-			.set({
-				status: "failed",
-				errorReason: "TIMEOUT",
-				updatedAt: new Date().toISOString(),
-			})
-			.where(eq(messageGenerations.id, generation.id));
-		return { success: false, skipped: true, reason: "stale_timeout" as const };
-	}
-	// CAS claim: only pending or failed (retry). Never re-enter from generating.
-	const claim = await db
-		.update(messageGenerations)
-		.set({ status: "generating", updatedAt: new Date().toISOString(), errorReason: null as any })
-		.where(
-			and(
-				eq(messageGenerations.id, generation.id),
-				or(eq(messageGenerations.status, "pending"), eq(messageGenerations.status, "failed")),
-			),
-		)
-		.returning();
-
-	if (!claim.length) {
-		return { success: true, skipped: true, reason: "claim_failed" as const };
+		return { success: true, skipped: true };
 	}
 
-	await setGenerationProgress(generation.id, "preparing", 10, { message: "claimed" });
-
+	// Find the message associated with this generation
 	const message = await db.query.messages.findFirst({
 		where: eq(messages.generationId, req.generationId),
 		with: {
 			chat: true,
-			attachments: { with: { file: true } },
+			attachments: {
+				with: {
+					file: true,
+				},
+			},
 		},
 	});
 
@@ -1096,153 +854,56 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 		throw new ServiceException("not_found", "Message not found");
 	}
 
-	// Abort if chat was hard-deleted mid-flight
-	const chatStill = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
-	if (!chatStill || chatStill.userId !== userId) {
-		await db
-			.update(messageGenerations)
-			.set({ status: "failed", errorReason: "UNKNOWN", updatedAt: new Date().toISOString() })
-			.where(eq(messageGenerations.id, generation.id));
-		return { success: false, skipped: true, reason: "chat_gone" as const };
-	}
-
-	// Parent user message = latest user message created BEFORE this assistant message
+	// Get user images from the parent user message (previous message in chat)
 	const userMessage = await db.query.messages.findFirst({
-		where: and(
-			eq(messages.chatId, message.chatId),
-			eq(messages.role, "user"),
-			lt(messages.createdAt, message.createdAt),
-		),
+		where: and(eq(messages.chatId, message.chatId), eq(messages.role, "user"), eq(messages.type, "text")),
 		orderBy: [desc(messages.createdAt)],
 		with: {
-			attachments: { with: { file: true } },
+			attachments: {
+				with: {
+					file: true,
+				},
+			},
 		},
 	});
 
-	const userImages = userMessage?.attachments?.length
+	const userImages = userMessage?.attachments.length
 		? await Promise.all(userMessage.attachments.map(async (att) => await getFileData(att.fileId, userId)))
 		: undefined;
 
+	// Mark generating so UI polling knows work started
+	await db
+		.update(messageGenerations)
+		.set({ status: "generating", updatedAt: new Date().toISOString() })
+		.where(eq(messageGenerations.id, generation.id));
+
+	// Extract parameters from generation record
 	const params = generation.parameters as any;
 	const imageCount = params?.imageCount || 1;
 	const width = params?.width;
 	const height = params?.height;
 	const aspectRatio = params?.aspectRatio;
 
-	// Capture context at claim time — waitUntil may outlive the request;
-	// getContext() is a module singleton and must still point at D1/R2 bindings.
-	const run = async () => {
-		// No updatedAt heartbeat — stale reclaim uses progress.startedAt / createdAt
+	// Execute image generation
+	await executeImageGeneration(
+		{
+			generationId: generation.id,
+			prompt: generation.prompt,
+			provider: generation.provider,
+			model: generation.model,
+			chatId: message.chatId,
+			userId,
+			userImages: userImages?.filter(Boolean) as string[] | undefined,
+			imageCount,
+			width,
+			height,
+			aspectRatio,
+			messageId: message.id,
+		},
+		ctx,
+	);
 
-		try {
-			const still = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
-			if (!still) {
-				await db
-					.update(messageGenerations)
-					.set({ status: "failed", errorReason: "UNKNOWN", updatedAt: new Date().toISOString() })
-					.where(eq(messageGenerations.id, generation.id));
-				return;
-			}
-
-			await executeImageGeneration(
-				{
-					generationId: generation.id,
-					prompt: generation.prompt,
-					provider: generation.provider,
-					model: generation.model,
-					chatId: message.chatId,
-					userId,
-					userImages: userImages?.filter(Boolean) as string[] | undefined,
-					imageCount,
-					width,
-					height,
-					aspectRatio,
-					messageId: message.id,
-				},
-				ctx,
-			);
-
-			// Safety net: if still generating after execute, do NOT blindly TIMEOUT —
-			// completed write may have failed while files were saved. Try to recover.
-			const gAfter = await db.query.messageGenerations.findFirst({
-				where: eq(messageGenerations.id, generation.id),
-			});
-			if (gAfter && (gAfter.status === "generating" || gAfter.status === "pending")) {
-				const fids = (gAfter.fileIds as string[] | null) || [];
-				if (fids.length > 0) {
-					console.warn("[generate] recovering completed from fileIds", generation.id);
-					await db
-						.update(messageGenerations)
-						.set({
-							status: "completed",
-							updatedAt: new Date().toISOString(),
-						})
-						.where(eq(messageGenerations.id, generation.id));
-				} else {
-					console.error("[generate] left in", gAfter.status, "after execute — API_ERROR");
-					await db
-						.update(messageGenerations)
-						.set({
-							status: "failed",
-							errorReason: "API_ERROR",
-							updatedAt: new Date().toISOString(),
-						})
-						.where(eq(messageGenerations.id, generation.id));
-				}
-			}
-
-			const after = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
-			if (!after) {
-				const g = await db.query.messageGenerations.findFirst({
-					where: eq(messageGenerations.id, generation.id),
-				});
-				const fids = (g?.fileIds as string[] | null) || [];
-				if (fids.length) await deleteStoredFiles(fids, userId);
-				await db.delete(messageGenerations).where(eq(messageGenerations.id, generation.id));
-			}
-		} catch (e) {
-			console.error("createMessageGenerate background error:", e);
-			try {
-				await db
-					.update(messageGenerations)
-					.set({
-						status: "failed",
-						errorReason: "UNKNOWN",
-						updatedAt: new Date().toISOString(),
-					})
-					.where(eq(messageGenerations.id, generation.id));
-			} catch (e2) {
-				console.error("failed to mark generation failed:", e2);
-			}
-		} finally {
-			/* no hb */
-		}
-	};
-
-	// Prefer background execution on Cloudflare to avoid 30s request timeout.
-	// IMPORTANT: when already invoked from an outer waitUntil (createMessage auto-start),
-	// we must AWAIT run() so the outer promise tracks full work. Nested waitUntil(run())
-	// + early return caused the worker to exit after claim while relay still ran → UI stuck.
-	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
-	const block = !!(ctx as any).blockGenerate;
-
-	if (block) {
-		await run();
-		return { success: true, async: false };
-	}
-
-	if (exec?.waitUntil) {
-		// HTTP path: respond immediately, keep worker alive for run()
-		exec.waitUntil(
-			run().catch((e) => {
-				console.error("[generate] waitUntil run failed", e);
-			}),
-		);
-		return { success: true, async: true };
-	}
-
-	await run();
-	return { success: true, async: false };
+	return { success: true };
 };
 
 export const RegenerateMessageSchema = z.object({
@@ -1277,7 +938,6 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 		throw new ServiceException("not_found", "Chat not found");
 	}
 
-	const prevParams = (originalGeneration.parameters as any) || {};
 	// Reset the existing generation record to pending status
 	await db
 		.update(messageGenerations)
@@ -1286,16 +946,6 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 			fileIds: null, // Clear previous results
 			errorReason: null, // Clear previous errors
 			generationTime: null, // Clear previous timing
-			parameters: {
-				...prevParams,
-				progress: {
-					phase: "queued",
-					percent: 5,
-					startedAt: new Date().toISOString(),
-					updatedAt: new Date().toISOString(),
-					message: "queued",
-				},
-			} as any,
 			updatedAt: new Date().toISOString(),
 		})
 		.where(eq(messageGenerations.id, originalGeneration.id));
@@ -1311,17 +961,12 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 	// Update chat timestamp
 	await db.update(chats).set({ updatedAt: new Date().toISOString() }).where(eq(chats.id, chat.id));
 
-	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
-	const start = createMessageGenerate(
-		{ generationId: originalGeneration.id },
-		{ ...ctx, blockGenerate: true } as any,
-	).catch((e) => console.error("auto regenerate generate failed", e));
-	if (exec?.waitUntil) exec.waitUntil(start);
-	else void start;
+	// Don't execute image generation here - client will call createMessageGenerate
+	// This avoids CF Worker 30-second timeout limitation
 
 	return {
 		messageId: req.messageId,
-		generationId: originalGeneration.id,
+		generationId: originalGeneration.id, // Return the existing generation ID
 	};
 };
 
