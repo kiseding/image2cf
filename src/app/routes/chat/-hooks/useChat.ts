@@ -311,13 +311,15 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 					setCurrentChatId(result.id);
 					setIsChatIdValidated(true);
 
-					// Trigger image generation if messages were created
+					// Server starts via waitUntil; client also kicks once (CAS skips if already running).
 					if (result.messages) {
 						const assistantMessage = result.messages.find((msg: any) => msg.role === "assistant");
-						if (assistantMessage?.generation?.id) {
-							// Server already starts generation via waitUntil on createMessage/createChat.
-							// Client only polls status — do not call createMessageGenerate again.
-							assistantMessage.generation.status = "generating";
+						const gid = assistantMessage?.generation?.id || (result as any).generationId;
+						if (gid) {
+							if (assistantMessage?.generation) assistantMessage.generation.status = "generating";
+							void chatService.createMessageGenerate({ generationId: gid }).catch((error) => {
+								console.error("Error triggering image generation:", error);
+							});
 						}
 					}
 
@@ -467,7 +469,12 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 						};
 					}, false);
 
-					// Generation started server-side; UI polls getGenerationStatus only.
+					// Server + client dual-start (idempotent CAS). Poll updates UI.
+					if (shouldTriggerGeneration) {
+						void chatService
+							.createMessageGenerate({ generationId: assistantMessage!.generation!.id })
+							.catch((error) => console.error("Error triggering image generation:", error));
+					}
 				} else {
 					// Fallback: revalidate if no messages returned
 					await currentChatMutate();
@@ -592,9 +599,13 @@ export const useChat = (initialChatId?: string, selectedProvider?: string, selec
 					};
 				}, false);
 
-				// Server regenerateMessage already starts generation via waitUntil.
-				// Client only polls status — do not call createMessageGenerate again.
-				await chatService.regenerateMessage({ messageId });
+				const result = await chatService.regenerateMessage({ messageId });
+				// Dual-start fallback (CAS skips if server already claimed)
+				if (result?.generationId) {
+					void chatService
+						.createMessageGenerate({ generationId: result.generationId })
+						.catch((error) => console.error("Error triggering image regeneration:", error));
+				}
 			} catch (error) {
 				console.error("Failed to regenerate message:", error);
 				// Revert to failed state on error

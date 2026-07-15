@@ -440,7 +440,9 @@ export const CreateMessageSchema = createInsertSchema(messages)
 		images: z.array(z.string()).optional(),
 	});
 export type CreateMessage = z.infer<typeof CreateMessageSchema>;
-type CreateMessageResponse = Pick<NonNullable<Awaited<ReturnType<typeof getChatById>>>, "messages">;
+type CreateMessageResponse = Pick<NonNullable<Awaited<ReturnType<typeof getChatById>>>, "messages"> & {
+	generationId?: string;
+};
 
 // Common image generation logic
 interface GenerationParams {
@@ -926,15 +928,20 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 		throw new ServiceException("error", "Failed to create assistant message");
 	}
 
-	// Kick off generation in background when executionCtx is available (preferred path).
-	// blockGenerate=true so outer waitUntil waits for the FULL run (not just claim+return).
+	// Start generation. Prefer waitUntil so HTTP returns fast; always ensure a start path.
+	// CAS in createMessageGenerate prevents double-run if client also triggers.
 	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
-	if (exec?.waitUntil && generation) {
-		exec.waitUntil(
-			createMessageGenerate({ generationId: generation.id }, { ...ctx, blockGenerate: true } as any).catch((e) =>
-				console.error("auto createMessageGenerate failed", e),
-			),
+	if (generation) {
+		const start = createMessageGenerate({ generationId: generation.id }, { ...ctx, blockGenerate: true } as any).catch(
+			(e) => console.error("auto createMessageGenerate failed", e),
 		);
+		if (exec?.waitUntil) {
+			exec.waitUntil(start);
+		} else {
+			// No CF executionCtx (or miswired) — still start; may be cut short on Workers without waitUntil
+			console.warn("[generate] no executionCtx.waitUntil — starting without background guarantee");
+			void start;
+		}
 	}
 
 	return {
@@ -945,8 +952,14 @@ const createMessage = async (req: CreateMessage, ctx: RequestContext) => {
 				// Include attachments for immediate display
 				attachments: attachmentResults,
 			},
-			{ ...assistantMessage, generation: generation!, attachments: [] },
+			{
+				...assistantMessage,
+				generation: generation!,
+				attachments: [],
+			},
 		],
+		// Client can use this to call createMessageGenerate once as fallback (idempotent)
+		generationId: generation?.id,
 	} satisfies CreateMessageResponse;
 };
 
@@ -1298,20 +1311,17 @@ const regenerateMessage = async (req: RegenerateMessage, ctx: RequestContext) =>
 	// Update chat timestamp
 	await db.update(chats).set({ updatedAt: new Date().toISOString() }).where(eq(chats.id, chat.id));
 
-	// Start in background when possible (idempotent client call still ok)
 	const exec = ctx.executionCtx as { waitUntil?: (p: Promise<unknown>) => void } | undefined;
-	if (exec?.waitUntil) {
-		exec.waitUntil(
-			createMessageGenerate(
-				{ generationId: originalGeneration.id },
-				{ ...ctx, blockGenerate: true } as any,
-			).catch((e) => console.error("auto regenerate generate failed", e)),
-		);
-	}
+	const start = createMessageGenerate(
+		{ generationId: originalGeneration.id },
+		{ ...ctx, blockGenerate: true } as any,
+	).catch((e) => console.error("auto regenerate generate failed", e));
+	if (exec?.waitUntil) exec.waitUntil(start);
+	else void start;
 
 	return {
 		messageId: req.messageId,
-		generationId: originalGeneration.id, // Return the existing generation ID
+		generationId: originalGeneration.id,
 	};
 };
 
