@@ -80,7 +80,7 @@ curl -sS -X POST "https://YOUR_HOST/api/debug/generations/fail-stale?maxAgeSec=1
 
 Turn `DEBUG` off in production when done.
 
-Generation runs through Cloudflare Queues. D1 compare-and-set claims and attempt versions prevent duplicate execution and stale result overwrites. A cron marks jobs still active after 15 minutes as `TIMEOUT`.
+D1 compare-and-set claims and attempt versions prevent duplicate execution and stale result overwrites. Requests wait synchronously by default; deployments that add a `GENERATION_QUEUE` binding can use durable Queue execution. A cron marks jobs still active after 15 minutes as `TIMEOUT`.
 
 ---
 

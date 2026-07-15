@@ -33,7 +33,7 @@
 - **后端**：Hono（Cloudflare Workers）  
 - **鉴权**：better-auth + 用户名登录 `/api/login`  
 - **数据**：Drizzle ORM · **D1**（会话/用户）· **R2**（图片）  
-- **部署**：GitHub Actions → Cloudflare Queues + `wrangler deploy --keep-vars`
+- **部署**：GitHub Actions → `wrangler deploy --keep-vars`
 
 ---
 
@@ -65,7 +65,7 @@
 
 - push 到 `main`，或 Actions → **Deploy Cloudflare Workers** → Run workflow  
 
-流程：安装依赖 → 创建 R2/Queues → 构建 → D1 迁移 → 部署 → 同步管理员和凭据加密 Secret。管理员仅在不存在时自动创建，不会覆盖已有密码。
+流程：安装依赖 → 创建 R2 → 构建 → D1 迁移 → 部署 → 同步管理员和凭据加密 Secret。管理员仅在不存在时自动创建，不会覆盖已有密码。
 
 ### 4. 登录
 
@@ -101,7 +101,7 @@ POST /api/setup/bootstrap
 - `DB` → D1  
 - `R2` → R2 bucket  
 - `AI` → Workers AI（可选）  
-- `GENERATION_QUEUE` → Cloudflare Queue（持久执行生图任务）
+- `GENERATION_QUEUE` → 可选 Cloudflare Queue 绑定；未配置时请求会同步等待生图完成
 - Cron：`0 3 * * *` 清理过期 R2 对象  
 - Cron：每 5 分钟回收超过 15 分钟仍未结束的生成任务
 
@@ -150,7 +150,7 @@ POST /api/setup/bootstrap
 
 `排队 → 准备 → 调用接口 → 解析 → 保存 → 完成`
 
-生成请求通过 Cloudflare Queue 持久执行，HTTP 请求只负责原子抢占并入队。同一任务通过 attempt 版本防止并发重复计费和旧结果覆盖；超过 **15 分钟**仍未完成的任务由定时任务标记为 `TIMEOUT`。
+同一任务通过 D1 原子抢占和 attempt 版本防止并发重复计费及旧结果覆盖。默认情况下 HTTP 请求同步等待生图完成；自行绑定 `GENERATION_QUEUE` 后可由 Queue 持久执行。超过 **15 分钟**仍未完成的任务由定时任务标记为 `TIMEOUT`。
 
 ---
 

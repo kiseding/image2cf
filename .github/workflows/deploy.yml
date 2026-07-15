@@ -73,14 +73,6 @@ jobs:
             cat /tmp/r2-create.log
           fi
 
-      - name: Ensure generation queues exist
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          pnpm exec wrangler queues create image2cf-generation || true
-          pnpm exec wrangler queues create image2cf-generation-dlq || true
-
       - name: Build
         run: pnpm build
         env:

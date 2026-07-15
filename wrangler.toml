@@ -26,17 +26,6 @@ binding = "AI"
 binding = "R2"
 bucket_name = "image2cf"
 
-[[queues.producers]]
-binding = "GENERATION_QUEUE"
-queue = "image2cf-generation"
-
-[[queues.consumers]]
-queue = "image2cf-generation"
-max_batch_size = 1
-max_batch_timeout = 1
-max_retries = 3
-dead_letter_queue = "image2cf-generation-dlq"
-
 # Five-minute generation recovery plus daily R2 object retention cleanup
 # Preview links in D1 remain permanent; expired objects return HTTP 410
 [triggers]

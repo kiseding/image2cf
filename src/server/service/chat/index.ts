@@ -915,12 +915,10 @@ const createMessageGenerate = async (req: CreateMessageGenerate, ctx: RequestCon
 
 	const task = processClaimedGeneration(message, ctx);
 
-	if (ctx.executionCtx && !ctx.blockGenerate) {
-		ctx.executionCtx.waitUntil(task);
-		return { success: true, accepted: true, queued: false, attempt: generation.attempt };
-	}
+	// Without a Queue binding, keep the request open. waitUntil only provides about
+	// 30 seconds after the response and is too short for image generation.
 	await task;
-	return { success: true, attempt: generation.attempt };
+	return { success: true, queued: false, attempt: generation.attempt };
 };
 
 export async function processClaimedGeneration(job: GenerationQueueMessage, ctx: RequestContext) {
