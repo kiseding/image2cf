@@ -8,7 +8,6 @@
   <a href="README_en-US.md">English</a> · 简体中文
 </p>
 
-在线示例：`https://image.kiseding.top`（以你自己的域名为准）
 
 ---
 
@@ -59,7 +58,6 @@
 | `CLOUDFLARE_R2_BUCKET_NAME` | 可选 | 默认 `image2cf` |
 | `CREDENTIALS_SECRET` | 建议 | 凭据加密密钥；不设时回退 `ADMIN_PASSWORD`，设置后不要更换 |
 
-**不要**把真实 D1 ID / 密钥写进仓库里的 `wrangler.toml`。
 
 ### 3. 触发部署
 
