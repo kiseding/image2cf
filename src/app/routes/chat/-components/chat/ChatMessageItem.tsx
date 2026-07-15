@@ -350,12 +350,13 @@ export function ChatMessageItem({
 										| { phase?: string; percent?: number; message?: string; startedAt?: string }
 										| undefined;
 									const phase = progress?.phase || (message.generation?.status === "pending" ? "queued" : "calling_api");
-									const percent =
-										typeof progress?.percent === "number"
-											? progress.percent
-											: message.generation?.status === "pending"
-												? 8
-												: 35;
+									const serverPct = typeof progress?.percent === "number" ? progress.percent : 30;
+									const startedMs = progress?.startedAt
+										? Date.parse(progress.startedAt)
+										: Date.parse(String(message.createdAt)) || Date.now();
+									const elapsedSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+									// Client pseudo-progress (server no longer ticks D1 every few seconds)
+									const percent = Math.min(95, Math.max(serverPct, 12 + Math.floor(elapsedSec / 4)));
 									const phaseLabel = (() => {
 										switch (phase) {
 											case "queued":
@@ -372,9 +373,6 @@ export function ChatMessageItem({
 												return t("chat.generating");
 										}
 									})();
-									const elapsedSec = progress?.startedAt
-										? Math.max(0, Math.floor((Date.now() - Date.parse(progress.startedAt)) / 1000))
-										: null;
 									return (
 										<div className="w-full min-w-[16rem] space-y-3 sm:min-w-[20rem]">
 											<div className="flex items-center justify-between gap-3">
@@ -387,20 +385,19 @@ export function ChatMessageItem({
 													<span className="font-medium text-foreground text-xs">{phaseLabel}</span>
 												</div>
 												<span className="font-mono text-muted-foreground text-xs tabular-nums">
-													{percent}%
-													{elapsedSec != null ? ` · ${elapsedSec}s` : ""}
+													{elapsedSec}s
 												</span>
 											</div>
 											<div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
 												<div
-													className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+													className="h-full rounded-full bg-primary transition-[width] duration-1000 ease-out"
 													style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
 												/>
 											</div>
 											<p className="text-muted-foreground text-[11px] leading-relaxed">
 												{t(
 													"chat.progress.hint",
-													"消息已发送成功。多数生图接口不支持像素级流式进度，这里显示的是服务端阶段进度。",
+													"消息已发送，正在等待中转返回（通常 10 秒～3 分钟）。",
 												)}
 											</p>
 											<div className="space-y-2">

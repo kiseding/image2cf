@@ -596,33 +596,22 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 			height,
 		};
 
-		// Soft progress while waiting on upstream (most image APIs are not streamable).
-		// gpt-image-2 relays often take 1–4 minutes; wall must be longer than poll "quiet" timeout.
+		// NO soft-progress D1 ticks (rate-limit killed completed writes).
+		// Phase writes only: preparing → calling_api → parsing → saving → done.
 		const wallStart = Date.now();
 		const WALL_MS = 360_000; // 6 minutes hard cap
-		let soft = 25;
 		let lastMeta: any = null;
 		const abortCtrl = new AbortController();
 		await setGenerationProgress(
 			generationId,
 			"calling_api",
-			soft,
+			30,
 			{
 				message: referImages?.length ? "calling_i2i" : "calling_t2i",
 				hasReference: !!referImages?.length,
 			},
 			{ touchRow: true },
 		);
-		const softTimer = setInterval(() => {
-			soft = Math.min(82, soft + 1);
-			void setGenerationProgress(
-				generationId,
-				"calling_api",
-				soft,
-				{ message: "waiting_upstream", meta: lastMeta || undefined, elapsedMs: Date.now() - wallStart },
-				{ touchRow: false },
-			).catch(() => {});
-		}, 10_000);
 
 		let result;
 		try {
@@ -674,7 +663,6 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				JSON.stringify(lastMeta || {}).slice(0, 300),
 			);
 		} catch (upErr: any) {
-			clearInterval(softTimer);
 			const isTimeout = upErr?.name === "AbortError" || /timeout|aborted/i.test(String(upErr?.message || upErr));
 			console.error("[generate] upstream failed", generationId, upErr, lastMeta);
 			await setGenerationProgress(generationId, "failed", 100, {
@@ -690,8 +678,6 @@ const executeImageGeneration = async (params: GenerationParams, ctx: RequestCont
 				})
 				.where(eq(messageGenerations.id, generationId));
 			return;
-		} finally {
-			clearInterval(softTimer);
 		}
 
 		// Save relay meta into parameters for post-mortem (single write, no per-tick D1 spam)
@@ -997,43 +983,12 @@ const getGenerationStatus = async (req: GetGenerationStatus, ctx: RequestContext
 				})()
 			: [];
 
-	// Heartbeat = progress.updatedAt (soft ticks every ~3s while worker is alive).
-	// NEVER use startedAt alone — that killed jobs still waiting on slow gpt-image (~2–4 min).
+	// PURE READ. Never write TIMEOUT here — that race-killed live jobs waiting on slow relays
+	// while soft-progress heartbeats were silent (D1 rate limit / no ticks).
 	const startedAtIso = progress?.startedAt || generation.createdAt;
-	const heartbeatIso = progress?.updatedAt || generation.updatedAt || startedAtIso;
 	const ageMs = Date.now() - new Date(startedAtIso).getTime();
-	const quietMs = Date.now() - new Date(heartbeatIso).getTime();
-	// Worker dead only if no progress heartbeat for 2+ minutes (not "running for 2+ minutes")
 	const stale =
-		(generation.status === "pending" || generation.status === "generating") && quietMs > 120_000;
-
-	// Auto-fail only when heartbeat is dead (worker likely gone). Long-running but live jobs are fine.
-	if (stale) {
-		await db
-			.update(messageGenerations)
-			.set({
-				status: "failed",
-				errorReason: "TIMEOUT",
-				updatedAt: new Date().toISOString(),
-			})
-			.where(eq(messageGenerations.id, generation.id));
-		return {
-			...generation,
-			status: "failed" as const,
-			errorReason: "TIMEOUT" as const,
-			progress: {
-				...(progress || {}),
-				phase: "failed",
-				percent: 100,
-				message: "worker_quiet_timeout",
-				quietMs,
-			},
-			stale: true,
-			ageMs,
-			quietMs,
-			resultUrls: undefined,
-		};
-	}
+		(generation.status === "pending" || generation.status === "generating") && ageMs > 420_000;
 
 	const resultUrls =
 		fileIdList.length > 0
@@ -1079,16 +1034,15 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 	if (generation.status === "completed") {
 		return { success: true, skipped: true, reason: "already_completed" as const };
 	}
-	// Already running: never auto re-call the relay (would double-bill / double-generate).
-	// Use heartbeat (progress.updatedAt), not startedAt — slow models tick for minutes.
+	// Already running: never re-call relay. Only past wall (7min) mark TIMEOUT without re-run.
 	if (generation.status === "generating") {
 		const params = (generation.parameters as any) || {};
-		const hbIso = params.progress?.updatedAt || generation.updatedAt || generation.createdAt;
-		const quiet = Date.now() - new Date(hbIso).getTime();
-		if (quiet < 120_000) {
+		const startedIso = params.progress?.startedAt || generation.createdAt;
+		const age = Date.now() - new Date(startedIso).getTime();
+		if (age < 420_000) {
 			return { success: true, skipped: true, reason: "already_generating" as const };
 		}
-		console.warn("[generate] quiet generating job — mark TIMEOUT, do not re-run", generation.id, "quietMs", quiet);
+		console.warn("[generate] beyond wall — TIMEOUT without re-run", generation.id, "ageMs", age);
 		await db
 			.update(messageGenerations)
 			.set({
@@ -1195,20 +1149,33 @@ async function createMessageGenerate(req: CreateMessageGenerate, ctx: RequestCon
 				ctx,
 			);
 
-			// Safety net: if still generating after execute (should not happen), mark failed
+			// Safety net: if still generating after execute, do NOT blindly TIMEOUT —
+			// completed write may have failed while files were saved. Try to recover.
 			const gAfter = await db.query.messageGenerations.findFirst({
 				where: eq(messageGenerations.id, generation.id),
 			});
 			if (gAfter && (gAfter.status === "generating" || gAfter.status === "pending")) {
-				console.error("[generate] left in", gAfter.status, "after execute — marking TIMEOUT");
-				await db
-					.update(messageGenerations)
-					.set({
-						status: "failed",
-						errorReason: "TIMEOUT",
-						updatedAt: new Date().toISOString(),
-					})
-					.where(eq(messageGenerations.id, generation.id));
+				const fids = (gAfter.fileIds as string[] | null) || [];
+				if (fids.length > 0) {
+					console.warn("[generate] recovering completed from fileIds", generation.id);
+					await db
+						.update(messageGenerations)
+						.set({
+							status: "completed",
+							updatedAt: new Date().toISOString(),
+						})
+						.where(eq(messageGenerations.id, generation.id));
+				} else {
+					console.error("[generate] left in", gAfter.status, "after execute — API_ERROR");
+					await db
+						.update(messageGenerations)
+						.set({
+							status: "failed",
+							errorReason: "API_ERROR",
+							updatedAt: new Date().toISOString(),
+						})
+						.where(eq(messageGenerations.id, generation.id));
+				}
 			}
 
 			const after = await db.query.chats.findFirst({ where: eq(chats.id, message.chatId) });
