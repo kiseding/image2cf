@@ -1,21 +1,27 @@
 import { extractImagesFromAny } from "@/server/lib/image-parse";
 import type { TypixChatApiResponse, TypixGenerateRequest } from "../types/api";
 import { normalizeOpenAIBaseURL } from "./relay-presets";
+import { generateImageViaResponsesApi } from "./responses-image";
 
 export type RelayEndpoints = {
 	/** 文生图 · text-to-image */
 	t2i: string;
-	/** 图生图 · image-to-image (prompt + image) */
+	/** 图生图 · image-to-image (prompt + image) — default Responses API */
 	i2i: string;
-	/** 编辑图片 · edit (prompt + image, optional mask; OpenAI /images/edits) */
+	/** 编辑图片 · edit (optional mask; OpenAI /images/edits) */
 	edit: string;
 };
 
 export const DEFAULT_OPENAI_ENDPOINTS: RelayEndpoints = {
 	t2i: "/images/generations",
-	i2i: "/images/edits",
+	// Relative to Base URL ending in /v1 → full path /v1/responses
+	i2i: "/responses",
 	edit: "/images/edits",
 };
+
+function isResponsesPath(path: string) {
+	return /responses?/i.test(path || "");
+}
 
 export function normalizeEndpoints(input?: Partial<RelayEndpoints> | null): RelayEndpoints {
 	const pick = (v: string | undefined, fallback: string) => {
@@ -92,6 +98,16 @@ export async function generateViaEndpointPaths(params: {
 	const width = params.request.width;
 	const height = params.request.height;
 
+	// Paths like /responses (→ /v1/responses) use Responses API JSON, not images/edits multipart
+	if (isResponsesPath(path)) {
+		return await generateImageViaResponsesApi({
+			baseURL,
+			apiKey: params.apiKey,
+			model,
+			request: params.request,
+		});
+	}
+
 	try {
 		let resp: Response;
 
@@ -114,6 +130,7 @@ export async function generateViaEndpointPaths(params: {
 				}),
 			});
 		} else {
+			// OpenAI images.edits-style multipart (only when path is not Responses)
 			const form = new FormData();
 			form.append("model", model);
 			form.append("prompt", params.request.prompt || "");
@@ -126,7 +143,7 @@ export async function generateViaEndpointPaths(params: {
 			const images = params.request.images || [];
 			if (images[0]) {
 				// images may be https URL or data URI
-				let dataUri = images[0];
+				const dataUri = images[0];
 				if (dataUri.startsWith("http")) {
 					// multipart needs file bytes — fetch
 					const r = await fetch(dataUri);

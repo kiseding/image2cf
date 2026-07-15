@@ -29,7 +29,7 @@ const EndpointsSchema = z.object({
 	/** 文生图 */
 	t2i: z.string().min(1).default("/images/generations"),
 	/** 图生图（有引用/上传图时） */
-	i2i: z.string().min(1).default("/images/edits"),
+	i2i: z.string().min(1).default("/responses"),
 	/** 编辑图片（局部编辑等同 edits；可配不同 path） */
 	edit: z.string().min(1).default("/images/edits"),
 });
@@ -122,7 +122,7 @@ const getRelayById = async (req: GetRelayById, ctx: RequestContext) => {
 		apiMode: (row as any).apiMode || "endpoints",
 		endpoints: (row as any).endpoints || {
 			t2i: "/images/generations",
-			i2i: "/images/edits",
+			i2i: "/responses",
 			edit: "/images/edits",
 		},
 		enabled: row.enabled,
@@ -146,7 +146,7 @@ const createRelay = async (req: CreateRelay, ctx: RequestContext) => {
 			endpoints:
 				req.endpoints ||
 				(req.type === "openai"
-					? { t2i: "/images/generations", i2i: "/images/edits", edit: "/images/edits" }
+					? { t2i: "/images/generations", i2i: "/responses", edit: "/images/edits" }
 					: null),
 			enabled: req.enabled,
 		})
@@ -400,7 +400,7 @@ const resolveRelayForGeneration = async (providerId: string, ctx: RequestContext
 		apiMode: ((row as any).apiMode || "endpoints") as "auto" | "images" | "responses" | "endpoints",
 		endpoints: (row as any).endpoints || {
 			t2i: "/images/generations",
-			i2i: "/images/edits",
+			i2i: "/responses",
 			edit: "/images/edits",
 		},
 	};

@@ -58,7 +58,8 @@ type RelayForm = {
 
 const defaultEndpoints: EndpointsForm = {
 	t2i: "/images/generations",
-	i2i: "/images/edits",
+	// Relative to Base URL …/v1 → full /v1/responses
+	i2i: "/responses",
 	edit: "/images/edits",
 };
 
@@ -515,7 +516,7 @@ function RelaySettingsPage() {
 												apiMode: "endpoints",
 											}))
 										}
-										placeholder="/images/edits"
+										placeholder="/responses"
 									/>
 									<p className="text-[10px] text-muted-foreground">{t("settings.relay.pathI2iDesc")}</p>
 								</div>
